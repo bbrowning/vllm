@@ -77,6 +77,7 @@ class RequestFuncInput:
     ignore_eos: bool = False
     language: str | None = None
     request_id: str | None = None
+    tools: list[dict] | None = None
 
 
 @dataclass
@@ -84,6 +85,7 @@ class RequestFuncOutput:
     """The output of the request function including metrics."""
 
     generated_text: str = ""
+    generated_tool_calls: list[dict] = field(default_factory=list)
     success: bool = False
     latency: float = 0.0
     output_tokens: int = 0
@@ -301,6 +303,8 @@ async def async_request_openai_chat_completions(
             "include_usage": True,
         },
     }
+    if request_func_input.tools:
+        payload["tools"] = request_func_input.tools
     _update_payload_common(payload, request_func_input)
 
     headers = {
@@ -313,6 +317,7 @@ async def async_request_openai_chat_completions(
     output.prompt_len = request_func_input.prompt_len
 
     generated_text = ""
+    generated_tool_calls = []
     ttft = 0.0
     st = time.perf_counter()
     output.start_time = st
@@ -342,6 +347,29 @@ async def async_request_openai_chat_completions(
 
                             if choices := data.get("choices"):
                                 content = choices[0]["delta"].get("content")
+                                tool_calls = choices[0]["delta"].get("tool_calls", [])
+                                for tool_call in tool_calls:
+                                    tool_call_idx = tool_call.get("index", None)
+                                    tool_call_fn = tool_call.get("function", {})
+                                    if tool_call_idx is None:
+                                        continue
+                                    if len(generated_tool_calls) < tool_call_idx + 1:
+                                        generated_tool_calls.append(
+                                            {
+                                                "id": tool_call.get("id", ""),
+                                                "index": tool_call_idx,
+                                                "type": tool_call.get("type", ""),
+                                                "function": tool_call_fn,
+                                            }
+                                        )
+                                    else:
+                                        previous_args = generated_tool_calls[
+                                            tool_call_idx
+                                        ]["function"].get("arguments", "")
+                                        new_args = tool_call_fn.get("arguments", {})
+                                        generated_tool_calls[tool_call_idx]["function"][
+                                            "arguments"
+                                        ] = previous_args + new_args
                                 # First token
                                 if ttft == 0.0:
                                     ttft = timestamp - st
@@ -358,6 +386,7 @@ async def async_request_openai_chat_completions(
                             most_recent_timestamp = timestamp
 
                 output.generated_text = generated_text
+                output.generated_tool_calls = generated_tool_calls
                 output.success = True
                 output.latency = most_recent_timestamp - st
             else:

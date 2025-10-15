@@ -81,6 +81,7 @@ class SampleRequest:
     multi_modal_data: MultiModalDataDict | dict | list[dict] | None = None
     lora_request: LoRARequest | None = None
     request_id: str | None = None
+    tools: list[dict] | None = None
 
 
 # -----------------------------------------------------------------------------
@@ -1935,6 +1936,7 @@ class CustomDataset(BenchmarkDataset):
                     prompt_len=prompt_len,
                     expected_output_len=output_len,
                     request_id=request_id_prefix + str(i),
+                    tools=item.get("tools", None),
                 )
             )
         self.maybe_oversample_requests(

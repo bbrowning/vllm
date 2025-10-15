@@ -516,11 +516,18 @@ async def benchmark(
     )
 
     print("Starting initial single prompt test run...")
-    test_prompt, test_prompt_len, test_output_len, test_mm_content = (
+    (
+        test_prompt,
+        test_prompt_len,
+        test_output_len,
+        test_mm_content,
+        test_tools,
+    ) = (
         input_requests[0].prompt,
         input_requests[0].prompt_len,
         input_requests[0].expected_output_len,
         input_requests[0].multi_modal_data,
+        input_requests[0].tools,
     )
 
     assert (
@@ -543,6 +550,7 @@ async def benchmark(
         ignore_eos=ignore_eos,
         extra_headers=extra_headers,
         extra_body=extra_body,
+        tools=test_tools,
     )
 
     if ready_check_timeout_sec > 0:
@@ -583,6 +591,7 @@ async def benchmark(
             ignore_eos=ignore_eos,
             extra_headers=extra_headers,
             extra_body=extra_body,
+            tools=test_tools,
         )
         profile_output = await request_func(
             request_func_input=profile_input, session=session
@@ -647,12 +656,13 @@ async def benchmark(
                 for rps_val in range(last_int_rps + 1, current_int_rps + 1):
                     rps_change_events.append({"rps": rps_val, "timestamp": timestamp})
                 last_int_rps = current_int_rps
-        prompt, prompt_len, output_len, mm_content, request_id = (
+        prompt, prompt_len, output_len, mm_content, request_id, tools = (
             request.prompt,
             request.prompt_len,
             request.expected_output_len,
             request.multi_modal_data,
             request.request_id,
+            request.tools,
         )
         req_model_id, req_model_name = model_id, model_name
         if lora_modules:
@@ -672,6 +682,7 @@ async def benchmark(
             extra_headers=extra_headers,
             extra_body=extra_body,
             request_id=request_id,
+            tools=tools,
         )
         tasks.append(
             asyncio.create_task(
@@ -762,6 +773,7 @@ async def benchmark(
             "ttfts": [output.ttft for output in outputs],
             "itls": [output.itl for output in outputs],
             "generated_texts": [output.generated_text for output in outputs],
+            "generated_tool_calls": [output.generated_tool_calls for output in outputs],
             "errors": [output.error for output in outputs],
             "max_output_tokens_per_s": metrics.max_output_tokens_per_s,
             "max_concurrent_requests": metrics.max_concurrent_requests,
@@ -904,7 +916,13 @@ def save_to_pytorch_benchmark_format(
     ]
     # These raw data might be useful, but they are rather big. They can be added
     # later if needed
-    ignored_metrics = ["ttfts", "itls", "generated_texts", "errors"]
+    ignored_metrics = [
+        "ttfts",
+        "itls",
+        "generated_texts",
+        "generated_tool_calls",
+        "errors",
+    ]
     pt_records = convert_to_pytorch_benchmark_format(
         args=args,
         metrics={k: [results[k]] for k in metrics if k in results},
@@ -1421,6 +1439,7 @@ async def main_async(args: argparse.Namespace) -> dict[str, Any]:
             "ttfts",
             "itls",
             "generated_texts",
+            "generated_tool_calls",
             "errors",
         ]:
             if field in result_json:
