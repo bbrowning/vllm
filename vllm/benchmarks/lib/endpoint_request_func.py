@@ -301,6 +301,7 @@ async def async_request_openai_chat_completions(
         "stream": True,
         "stream_options": {
             "include_usage": True,
+            "continuous_usage_stats": True,
         },
     }
     if request_func_input.tools:
@@ -322,6 +323,7 @@ async def async_request_openai_chat_completions(
     st = time.perf_counter()
     output.start_time = st
     most_recent_timestamp = st
+    most_recent_chunk_completion_tokens = 0
     try:
         async with session.post(url=api_url, json=payload, headers=headers) as response:
             if response.status == 200:
@@ -377,10 +379,18 @@ async def async_request_openai_chat_completions(
 
                                 # Decoding phase
                                 else:
-                                    output.itl.append(timestamp - most_recent_timestamp)
+                                    if usage := data.get("usage"):
+                                        completion_tokens = usage.get("completion_tokens")
+                                        chunk_completion_tokens = completion_tokens - most_recent_chunk_completion_tokens
+                                        if completion_tokens:
+                                            most_recent_chunk_completion_tokens = completion_tokens
+                                    else:
+                                        chunk_completion_tokens = 1
+                                    output.itl.append((timestamp - most_recent_timestamp) / chunk_completion_tokens)
 
                                 generated_text += content or ""
                             elif usage := data.get("usage"):
+                                # Final usage chunk after all content is streamed
                                 output.output_tokens = usage.get("completion_tokens")
 
                             most_recent_timestamp = timestamp
