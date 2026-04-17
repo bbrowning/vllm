@@ -4,17 +4,19 @@
 import json
 
 import pytest
-from openai_harmony import (
+
+from vllm.entrypoints.openai.engine.protocol import FunctionCall, ToolCall
+from vllm.entrypoints.openai.parser.harmony_encoding import (
+    load_harmony_encoding,
+)
+from vllm.entrypoints.openai.parser.harmony_types import (
     Conversation,
     DeveloperContent,
     HarmonyEncodingName,
     Message,
     Role,
     SystemContent,
-    load_harmony_encoding,
 )
-
-from vllm.entrypoints.openai.engine.protocol import FunctionCall, ToolCall
 from vllm.tokenizers import get_tokenizer
 from vllm.tool_parsers.openai_tool_parser import OpenAIToolParser
 

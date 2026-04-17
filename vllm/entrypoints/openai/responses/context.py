@@ -15,7 +15,6 @@ from openai.types.responses.response_function_tool_call_output_item import (
     ResponseFunctionToolCallOutputItem,
 )
 from openai.types.responses.tool import Mcp
-from openai_harmony import Author, Message, Role, StreamState, TextContent
 
 from vllm import envs
 from vllm.entrypoints.chat_utils import (
@@ -26,6 +25,13 @@ from vllm.entrypoints.mcp.tool import Tool
 from vllm.entrypoints.mcp.tool_server import ToolServer
 from vllm.entrypoints.openai.engine.protocol import (
     FunctionCall,
+)
+from vllm.entrypoints.openai.parser.harmony_types import (
+    Author,
+    Message,
+    Role,
+    StreamState,
+    TextContent,
 )
 from vllm.entrypoints.openai.parser.harmony_utils import (
     get_encoding,
@@ -396,11 +402,11 @@ class ParsableContext(ConversationContext):
             return await tool_session.get_result_parsable_context(self)
         if envs.VLLM_TOOL_JSON_ERROR_AUTOMATIC_RETRY:
             try:
-                args = json.loads(last_msg.arguments)
+                args = json.loads(last_msg.arguments)  # type: ignore[attr-defined]
             except json.JSONDecodeError as e:
-                return _create_json_parse_error_messages(last_msg, e)
+                return _create_json_parse_error_messages(last_msg, e)  # type: ignore[arg-type]
         else:
-            args = json.loads(last_msg.arguments)
+            args = json.loads(last_msg.arguments)  # type: ignore[attr-defined]
         result = await tool_session.call_tool("search", args)
         result_str = result.content[0].text
 
@@ -439,11 +445,11 @@ class ParsableContext(ConversationContext):
         # tool_name = last_msg.recipient.split(".")[1].split(" ")[0]
         if envs.VLLM_TOOL_JSON_ERROR_AUTOMATIC_RETRY:
             try:
-                args = json.loads(last_msg.arguments)
+                args = json.loads(last_msg.arguments)  # type: ignore[attr-defined]
             except json.JSONDecodeError as e:
                 return _create_json_parse_error_messages(last_msg, e)
         else:
-            args = json.loads(last_msg.arguments)
+            args = json.loads(last_msg.arguments)  # type: ignore[attr-defined]
         result = await tool_session.call_tool("exec", args)
         result_str = result.content[0].text
 
@@ -717,6 +723,7 @@ class HarmonyContext(ConversationContext):
         self.called_tools.add("browser")
         if isinstance(tool_session, Tool):
             return await tool_session.get_result(self)
+        assert last_msg.recipient is not None
         tool_name = last_msg.recipient.split(".")[1]
         if envs.VLLM_TOOL_JSON_ERROR_AUTOMATIC_RETRY:
             try:
@@ -804,6 +811,7 @@ class HarmonyContext(ConversationContext):
         self.called_tools.add("container")
         if isinstance(tool_session, Tool):
             return await tool_session.get_result(self)
+        assert last_msg.recipient is not None
         tool_name = last_msg.recipient.split(".")[1].split(" ")[0]
         if envs.VLLM_TOOL_JSON_ERROR_AUTOMATIC_RETRY:
             try:

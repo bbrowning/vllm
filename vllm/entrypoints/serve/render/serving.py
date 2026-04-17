@@ -4,8 +4,6 @@ from collections.abc import Sequence
 from http import HTTPStatus
 from typing import Any
 
-from openai_harmony import Message as OpenAIMessage
-
 from vllm.config import ModelConfig
 from vllm.entrypoints.chat_utils import (
     ChatTemplateContentFormatOption,
@@ -18,6 +16,9 @@ from vllm.entrypoints.openai.engine.protocol import (
     ErrorResponse,
 )
 from vllm.entrypoints.openai.models.serving import OpenAIModelRegistry
+from vllm.entrypoints.openai.parser.harmony_types import (
+    Message as OpenAIMessage,
+)
 from vllm.entrypoints.openai.parser.harmony_utils import (
     get_developer_message,
     get_system_message,

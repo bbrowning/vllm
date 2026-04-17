@@ -2,9 +2,9 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import pytest
-from openai_harmony import Message, Role
 
 from tests.entrypoints.openai.utils import verify_harmony_messages
+from vllm.entrypoints.openai.parser.harmony_types import Message, Role
 from vllm.entrypoints.openai.parser.harmony_utils import (
     auto_drop_analysis_messages,
     get_encoding,

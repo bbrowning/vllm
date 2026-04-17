@@ -45,7 +45,6 @@ from openai.types.responses.response_reasoning_item import (
 )
 from openai.types.responses.tool import Tool
 from openai.types.shared import Metadata, Reasoning
-from openai_harmony import Message as OpenAIHarmonyMessage
 from pydantic import (
     Field,
     ValidationError,
@@ -59,6 +58,9 @@ from vllm.entrypoints.chat_utils import (
     ChatTemplateContentFormatOption,
 )
 from vllm.entrypoints.openai.engine.protocol import OpenAIBaseModel
+from vllm.entrypoints.openai.parser.harmony_types import (
+    Message as OpenAIHarmonyMessage,
+)
 from vllm.exceptions import VLLMValidationError
 from vllm.logger import init_logger
 from vllm.renderers import ChatParams, TokenizeParams, merge_kwargs

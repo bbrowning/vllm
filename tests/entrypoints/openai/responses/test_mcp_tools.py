@@ -7,10 +7,14 @@ from __future__ import annotations
 import pytest
 import pytest_asyncio
 from openai import OpenAI
-from openai_harmony import Message, ToolDescription, ToolNamespaceConfig
 
 from tests.utils import RemoteOpenAIServer
 from vllm.entrypoints.mcp.tool_server import MCPToolServer
+from vllm.entrypoints.openai.parser.harmony_types import (
+    Message,
+    ToolDescription,
+    ToolNamespaceConfig,
+)
 
 from .conftest import (
     BASE_TEST_ENV,

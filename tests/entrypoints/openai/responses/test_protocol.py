@@ -1,9 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-from openai_harmony import (
+from vllm.entrypoints.openai.parser.harmony_types import (
     Message,
 )
-
 from vllm.entrypoints.openai.responses.protocol import (
     serialize_message,
     serialize_messages,

@@ -8,8 +8,13 @@ from openai.types.responses import (
     ResponseReasoningItem,
 )
 from openai.types.responses.response_output_item import McpCall
-from openai_harmony import Author, Message, Role, TextContent
 
+from vllm.entrypoints.openai.parser.harmony_types import (
+    Author,
+    Message,
+    Role,
+    TextContent,
+)
 from vllm.entrypoints.openai.responses.harmony import (
     harmony_to_response_output,
     parser_state_to_response_output,

@@ -54,9 +54,9 @@ from openai.types.responses.response_output_item import McpCall
 from openai.types.responses.response_reasoning_item import (
     Content as ResponseReasoningTextContent,
 )
-from openai_harmony import Message as HarmonyMessage
 
 from vllm.entrypoints.mcp.tool_server import ToolServer
+from vllm.entrypoints.openai.parser.harmony_types import Message as HarmonyMessage
 from vllm.entrypoints.openai.responses.context import StreamingHarmonyContext
 from vllm.entrypoints.openai.responses.protocol import (
     ResponseReasoningPartAddedEvent,
@@ -626,6 +626,7 @@ def emit_browser_tool_events(
     state: StreamingState,
 ) -> list[StreamingResponsesResponse]:
     """Emit events for browser tool calls (web search)."""
+    assert previous_item.recipient is not None
     function_name = previous_item.recipient[len("browser.") :]
     parsed_args = json.loads(previous_item.content[0].text)
     action = None

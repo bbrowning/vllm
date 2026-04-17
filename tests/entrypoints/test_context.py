@@ -4,8 +4,14 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-from openai_harmony import Author, Message, Role, StreamState, TextContent
 
+from vllm.entrypoints.openai.parser.harmony_types import (
+    Author,
+    Message,
+    Role,
+    StreamState,
+    TextContent,
+)
 from vllm.entrypoints.openai.responses.context import (
     HarmonyContext,
     SimpleContext,

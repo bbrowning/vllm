@@ -665,10 +665,8 @@ omegaconf==2.3.0
     #   lightning
 open-clip-torch==2.32.0
     # via -r requirements/test/cuda.in
-openai-harmony==0.0.4
-    # via
-    #   -c requirements/common.txt
-    #   gpt-oss
+openai-harmony==0.0.8
+    # via gpt-oss
 opencensus==0.11.4
     # via ray
 opencensus-context==0.1.3

@@ -4,9 +4,11 @@ from abc import ABC, abstractmethod
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
-from openai_harmony import ToolDescription, ToolNamespaceConfig
-
 from vllm.entrypoints.mcp.tool import HarmonyBrowserTool, HarmonyPythonTool, Tool
+from vllm.entrypoints.openai.parser.harmony_types import (
+    ToolDescription,
+    ToolNamespaceConfig,
+)
 from vllm.logger import init_logger
 
 logger = init_logger(__name__)

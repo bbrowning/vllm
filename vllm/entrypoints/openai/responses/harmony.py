@@ -27,8 +27,14 @@ from openai.types.responses.response_output_item import McpCall
 from openai.types.responses.response_reasoning_item import (
     Content as ResponseReasoningTextContent,
 )
-from openai_harmony import Author, Message, Role, StreamableParser, TextContent
 
+from vllm.entrypoints.openai.parser.harmony_stream import StreamableParser
+from vllm.entrypoints.openai.parser.harmony_types import (
+    Author,
+    Message,
+    Role,
+    TextContent,
+)
 from vllm.entrypoints.openai.parser.harmony_utils import (
     BUILTIN_TOOL_TO_MCP_SERVER_LABEL,
     flatten_chat_text_content,

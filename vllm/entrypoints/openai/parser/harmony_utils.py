@@ -6,7 +6,14 @@ from collections.abc import Iterable, Sequence
 from typing import Literal
 
 from openai.types.responses.tool import Tool
-from openai_harmony import (
+
+from vllm import envs
+from vllm.entrypoints.openai.chat_completion.protocol import ChatCompletionToolsParam
+from vllm.entrypoints.openai.parser.harmony_encoding import (
+    load_harmony_encoding,
+)
+from vllm.entrypoints.openai.parser.harmony_stream import StreamableParser
+from vllm.entrypoints.openai.parser.harmony_types import (
     Author,
     Conversation,
     DeveloperContent,
@@ -14,15 +21,11 @@ from openai_harmony import (
     Message,
     ReasoningEffort,
     Role,
-    StreamableParser,
     SystemContent,
     TextContent,
     ToolDescription,
-    load_harmony_encoding,
+    ToolNamespaceConfig,
 )
-
-from vllm import envs
-from vllm.entrypoints.openai.chat_completion.protocol import ChatCompletionToolsParam
 from vllm.logger import init_logger
 
 logger = init_logger(__name__)
@@ -68,9 +71,9 @@ def get_system_message(
     model_identity: str | None = None,
     reasoning_effort: Literal["high", "medium", "low"] | None = None,
     start_date: str | None = None,
-    browser_description: str | None = None,
-    python_description: str | None = None,
-    container_description: str | None = None,
+    browser_description: ToolNamespaceConfig | None = None,
+    python_description: ToolNamespaceConfig | None = None,
+    container_description: ToolNamespaceConfig | None = None,
     instructions: str | None = None,
     with_custom_tools: bool = False,
 ) -> Message:

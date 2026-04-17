@@ -14,9 +14,9 @@ import pytest
 import pytest_asyncio
 import requests
 from openai import InternalServerError, NotFoundError, OpenAI
-from openai_harmony import Message
 
 from tests.utils import RemoteOpenAIServer
+from vllm.entrypoints.openai.parser.harmony_types import Message
 
 from .conftest import (
     BASE_TEST_ENV,

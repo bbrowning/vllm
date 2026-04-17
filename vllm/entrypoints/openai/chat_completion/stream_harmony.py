@@ -9,14 +9,13 @@ harmony parser state during streaming chat completions.
 
 from typing import NamedTuple
 
-from openai_harmony import StreamableParser
-
 from vllm.entrypoints.chat_utils import make_tool_call_id
 from vllm.entrypoints.openai.engine.protocol import (
     DeltaFunctionCall,
     DeltaMessage,
     DeltaToolCall,
 )
+from vllm.entrypoints.openai.parser.harmony_stream import StreamableParser
 
 
 class TokenState(NamedTuple):

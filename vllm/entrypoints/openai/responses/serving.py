@@ -37,7 +37,6 @@ from openai.types.responses.response_reasoning_item import (
     Content as ResponseReasoningTextContent,
 )
 from openai.types.responses.tool import Mcp, Tool
-from openai_harmony import Message as OpenAIHarmonyMessage
 from pydantic import TypeAdapter
 
 from vllm import envs
@@ -60,6 +59,9 @@ from vllm.entrypoints.openai.engine.serving import (
     OpenAIServing,
 )
 from vllm.entrypoints.openai.models.serving import OpenAIServingModels
+from vllm.entrypoints.openai.parser.harmony_types import (
+    Message as OpenAIHarmonyMessage,
+)
 from vllm.entrypoints.openai.parser.harmony_utils import (
     get_developer_message,
     get_stop_tokens_for_assistant_actions,
@@ -1174,7 +1176,7 @@ class OpenAIServingResponses(OpenAIServing):
                     for msg in recent_turn_msgs:
                         assert isinstance(msg, OpenAIHarmonyMessage)
                         prev_msgs.append(msg)
-            messages.extend(prev_msgs)
+            messages.extend(prev_msgs)  # type: ignore[arg-type]
         # Append the new input.
         # Responses API supports simple text inputs without chat format.
         if isinstance(request.input, str):

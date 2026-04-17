@@ -8,8 +8,13 @@ from typing import TYPE_CHECKING, Any
 from openai.types.responses.response_function_tool_call_output_item import (
     ResponseFunctionToolCallOutputItem,
 )
-from openai_harmony import Author, Message, Role, TextContent
 
+from vllm.entrypoints.openai.parser.harmony_types import (
+    Author,
+    Message,
+    Role,
+    TextContent,
+)
 from vllm.logger import init_logger
 from vllm.utils import random_uuid
 

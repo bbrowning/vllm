@@ -358,9 +358,7 @@ onemkl-sycl-rng==2025.3.0
 onemkl-sycl-sparse==2025.3.0
     # via torch
 openai-harmony==0.0.8
-    # via
-    #   -c requirements/common.txt
-    #   gpt-oss
+    # via gpt-oss
 opencv-python-headless==4.13.0.92
     # via
     #   -c requirements/common.txt
