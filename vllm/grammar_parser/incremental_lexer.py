@@ -1,0 +1,156 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+"""Incremental text lexer that converts text chunks into grammar terminal
+tokens, with prefix-match buffering for ambiguous boundaries."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import regex as re
+
+
+@dataclass(slots=True)
+class TerminalDef:
+    """A grammar terminal with its matching pattern."""
+
+    name: str
+    pattern: re.Pattern[str]
+    priority: int = 0
+    is_literal: bool = False
+    literal: str = ""
+
+
+@dataclass(slots=True)
+class LexToken:
+    """A lexed token ready for the parser."""
+
+    terminal: str
+    value: str
+
+
+class IncrementalLexer:
+    """Converts streaming text into grammar terminal tokens.
+
+    The key feature is **prefix-match buffering**: when the text in the
+    buffer could be the start of a multi-character terminal (e.g.
+    ``"<tool_"`` that could become ``"<tool_call>"``), the lexer holds
+    the text rather than emitting it.  When the next chunk arrives, it
+    either completes the terminal or flushes the buffered text as
+    content.
+
+    Terminals are tried in priority order (literals first, then by
+    descending priority, then by pattern length).
+    """
+
+    def __init__(
+        self,
+        terminals: list[TerminalDef],
+        content_terminal: str = "__CONTENT__",
+    ) -> None:
+        self.terminals = sorted(
+            terminals,
+            key=lambda t: (not t.is_literal, -t.priority, -len(t.pattern.pattern)),
+        )
+        self.content_terminal = content_terminal
+        self.buffer = ""
+
+        self._literal_strings: list[tuple[str, str]] = []
+        self._regex_terminals: list[TerminalDef] = []
+        for t in self.terminals:
+            if t.is_literal:
+                self._literal_strings.append((t.literal, t.name))
+            else:
+                self._regex_terminals.append(t)
+
+        self._max_literal_len = max(
+            (len(lit) for lit, _ in self._literal_strings), default=0
+        )
+
+    def feed(self, text: str) -> list[LexToken]:
+        """Feed a text chunk and return any fully-resolved tokens."""
+        self.buffer += text
+        return self._drain()
+
+    def flush(self) -> list[LexToken]:
+        """Force-emit everything remaining in the buffer (end-of-stream)."""
+        tokens: list[LexToken] = []
+        if self.buffer:
+            tokens.append(LexToken(self.content_terminal, self.buffer))
+            self.buffer = ""
+        return tokens
+
+    def _drain(self) -> list[LexToken]:
+        tokens: list[LexToken] = []
+
+        while self.buffer:
+            best_match: tuple[str, str, int] | None = None  # (terminal, value, length)
+
+            for lit, name in self._literal_strings:
+                if self.buffer.startswith(lit) and (
+                    best_match is None or len(lit) > best_match[2]
+                ):
+                    best_match = (name, lit, len(lit))
+
+            for tdef in self._regex_terminals:
+                m = tdef.pattern.match(self.buffer)
+                if m and m.start() == 0:
+                    matched = m.group()
+                    if best_match is None or len(matched) > best_match[2]:
+                        best_match = (tdef.name, matched, len(matched))
+
+            if self._has_prefix_match():
+                if best_match is not None:
+                    tokens.append(LexToken(best_match[0], best_match[1]))
+                    self.buffer = self.buffer[best_match[2] :]
+                    continue
+                else:
+                    break
+
+            if best_match is not None:
+                tokens.append(LexToken(best_match[0], best_match[1]))
+                self.buffer = self.buffer[best_match[2] :]
+            else:
+                content_end = self._find_content_boundary()
+                if content_end > 0:
+                    tokens.append(
+                        LexToken(self.content_terminal, self.buffer[:content_end])
+                    )
+                    self.buffer = self.buffer[content_end:]
+                else:
+                    tokens.append(LexToken(self.content_terminal, self.buffer[0]))
+                    self.buffer = self.buffer[1:]
+
+        return tokens
+
+    def _has_prefix_match(self) -> bool:
+        """Check if the buffer is a proper prefix of any literal terminal."""
+        for lit, _ in self._literal_strings:
+            if len(self.buffer) < len(lit) and lit.startswith(self.buffer):
+                return True
+        return False
+
+    def _find_content_boundary(self) -> int:
+        """Find how many characters at the start of the buffer are safe
+        to emit as content (i.e. cannot be the start of any terminal)."""
+        for i in range(1, len(self.buffer)):
+            suffix = self.buffer[i:]
+            for lit, _ in self._literal_strings:
+                check_len = min(len(suffix), len(lit))
+                if suffix[:check_len] == lit[:check_len]:
+                    return i
+        return len(self.buffer)
+
+
+def terminals_from_literals(literals: dict[str, str]) -> list[TerminalDef]:
+    """Create TerminalDef instances from a mapping of
+    ``{terminal_name: literal_string}``."""
+    return [
+        TerminalDef(
+            name=name,
+            pattern=re.compile(re.escape(lit)),
+            is_literal=True,
+            literal=lit,
+        )
+        for name, lit in literals.items()
+    ]
