@@ -430,6 +430,7 @@ class GrammarReasoningParser(ReasoningParser):
         super().__init__(tokenizer, **kwargs)
         self.grammar_config = grammar_config
         self._engine = StreamingParserEngine(grammar_config, tokenizer)
+        self._reasoning_ended: bool = False
 
         vocab = self.vocab
         self._reasoning_start_token_id: int | None = None
@@ -453,22 +454,24 @@ class GrammarReasoningParser(ReasoningParser):
     def is_reasoning_end(self, input_ids: Sequence[int]) -> bool:
         end_id = self._reasoning_end_token_id
         start_id = self._reasoning_start_token_id
-        if end_id is None:
+        if end_id is not None:
+            for i in range(len(input_ids) - 1, -1, -1):
+                if input_ids[i] == end_id:
+                    return True
+                if start_id is not None and input_ids[i] == start_id:
+                    return False
             return False
-        for i in range(len(input_ids) - 1, -1, -1):
-            if input_ids[i] == end_id:
-                return True
-            if start_id is not None and input_ids[i] == start_id:
-                return False
-        return False
+        return self._reasoning_ended
 
     def extract_content_ids(self, input_ids: list[int]) -> list[int]:
         end_id = self._reasoning_end_token_id
-        if end_id is None:
+        if end_id is not None:
+            for i in range(len(input_ids) - 1, -1, -1):
+                if input_ids[i] == end_id:
+                    return input_ids[i + 1 :]
             return input_ids
-        for i in range(len(input_ids) - 1, -1, -1):
-            if input_ids[i] == end_id:
-                return input_ids[i + 1 :]
+        if self._reasoning_ended:
+            return []
         return input_ids
 
     def extract_reasoning(
@@ -512,6 +515,8 @@ class GrammarReasoningParser(ReasoningParser):
                 reasoning_parts.append(event.value)
             elif event.type == EventType.TEXT_CHUNK:
                 content_parts.append(event.value)
+            elif event.type == EventType.REASONING_END:
+                self._reasoning_ended = True
 
         reasoning = "".join(reasoning_parts) or None
         content = "".join(content_parts) or None

@@ -127,6 +127,10 @@ _GRAMMAR_REASONING_PARSERS_TO_REGISTER = {
         "vllm.grammar_parser.registered_parsers",
         "GrammarThinkTagReasoningParser",
     ),
+    "gemma4_grammar": (
+        "vllm.grammar_parser.registered_parsers",
+        "GrammarGemma4ReasoningParser",
+    ),
 }
 
 
