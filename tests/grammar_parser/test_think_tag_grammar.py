@@ -65,6 +65,36 @@ def _make_tokenizer_with_text_map(
     return tokenizer
 
 
+def _stream_and_collect(
+    parser: GrammarReasoningParser,
+    chunks: list[str],
+) -> tuple[str, str]:
+    """Feed chunks through streaming and collect reasoning/content."""
+    reasoning_parts: list[str] = []
+    content_parts: list[str] = []
+    prev_text = ""
+    prev_ids: list[int] = []
+    for chunk in chunks:
+        cur_text = prev_text + chunk
+        cur_ids = prev_ids + [0]
+        delta = parser.extract_reasoning_streaming(
+            previous_text=prev_text,
+            current_text=cur_text,
+            delta_text=chunk,
+            previous_token_ids=tuple(prev_ids),
+            current_token_ids=tuple(cur_ids),
+            delta_token_ids=(0,),
+        )
+        if delta:
+            if delta.reasoning:
+                reasoning_parts.append(delta.reasoning)
+            if delta.content:
+                content_parts.append(delta.content)
+        prev_text = cur_text
+        prev_ids = cur_ids
+    return "".join(reasoning_parts), "".join(content_parts)
+
+
 class TestDefaultThinkTags:
     """Tests with default <think>/</think> tags (DeepSeekR1, Qwen3, etc.)."""
 
@@ -119,35 +149,11 @@ class TestDefaultThinkTags:
         assert result == [30, 40]
 
     def test_streaming_reasoning_then_content(self, parser):
-        chunks = ["<think>", "thinking", " hard", "</think>", "done"]
-        reasoning_parts = []
-        content_parts = []
-
-        prev_text = ""
-        prev_ids: list[int] = []
-
-        for chunk in chunks:
-            cur_text = prev_text + chunk
-            delta_ids = [0]
-            cur_ids = prev_ids + delta_ids
-            delta = parser.extract_reasoning_streaming(
-                previous_text=prev_text,
-                current_text=cur_text,
-                delta_text=chunk,
-                previous_token_ids=tuple(prev_ids),
-                current_token_ids=tuple(cur_ids),
-                delta_token_ids=tuple(delta_ids),
-            )
-            if delta:
-                if delta.reasoning:
-                    reasoning_parts.append(delta.reasoning)
-                if delta.content:
-                    content_parts.append(delta.content)
-            prev_text = cur_text
-            prev_ids = list(cur_ids)
-
-        assert "".join(reasoning_parts) == "thinking hard"
-        assert "".join(content_parts) == "done"
+        reasoning, content = _stream_and_collect(
+            parser, ["<think>", "thinking", " hard", "</think>", "done"]
+        )
+        assert reasoning == "thinking hard"
+        assert content == "done"
 
 
 class TestSeedOSSTags:
@@ -170,39 +176,11 @@ class TestSeedOSSTags:
         assert content == "Result: yes."
 
     def test_streaming(self, parser):
-        chunks = [
-            "<seed:think>",
-            "step 1",
-            "</seed:think>",
-            "answer",
-        ]
-        reasoning_parts = []
-        content_parts = []
-        prev_text = ""
-        prev_ids: list[int] = []
-
-        for chunk in chunks:
-            cur_text = prev_text + chunk
-            delta_ids = [0]
-            cur_ids = prev_ids + delta_ids
-            delta = parser.extract_reasoning_streaming(
-                previous_text=prev_text,
-                current_text=cur_text,
-                delta_text=chunk,
-                previous_token_ids=tuple(prev_ids),
-                current_token_ids=tuple(cur_ids),
-                delta_token_ids=tuple(delta_ids),
-            )
-            if delta:
-                if delta.reasoning:
-                    reasoning_parts.append(delta.reasoning)
-                if delta.content:
-                    content_parts.append(delta.content)
-            prev_text = cur_text
-            prev_ids = list(cur_ids)
-
-        assert "".join(reasoning_parts) == "step 1"
-        assert "".join(content_parts) == "answer"
+        reasoning, content = _stream_and_collect(
+            parser, ["<seed:think>", "step 1", "</seed:think>", "answer"]
+        )
+        assert reasoning == "step 1"
+        assert content == "answer"
 
 
 class TestMistralTags:
@@ -225,34 +203,11 @@ class TestMistralTags:
         assert content == "The answer."
 
     def test_streaming(self, parser):
-        chunks = ["[THINK]", "reasoning", "[/THINK]", "content"]
-        reasoning_parts = []
-        content_parts = []
-        prev_text = ""
-        prev_ids: list[int] = []
-
-        for chunk in chunks:
-            cur_text = prev_text + chunk
-            delta_ids = [0]
-            cur_ids = prev_ids + delta_ids
-            delta = parser.extract_reasoning_streaming(
-                previous_text=prev_text,
-                current_text=cur_text,
-                delta_text=chunk,
-                previous_token_ids=tuple(prev_ids),
-                current_token_ids=tuple(cur_ids),
-                delta_token_ids=tuple(delta_ids),
-            )
-            if delta:
-                if delta.reasoning:
-                    reasoning_parts.append(delta.reasoning)
-                if delta.content:
-                    content_parts.append(delta.content)
-            prev_text = cur_text
-            prev_ids = list(cur_ids)
-
-        assert "".join(reasoning_parts) == "reasoning"
-        assert "".join(content_parts) == "content"
+        reasoning, content = _stream_and_collect(
+            parser, ["[THINK]", "reasoning", "[/THINK]", "content"]
+        )
+        assert reasoning == "reasoning"
+        assert content == "content"
 
 
 class TestEmptyReasoning:

@@ -5,13 +5,13 @@ incremental lexing, and state-machine-driven semantic event emission."""
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Sequence
 
 from vllm.grammar_parser.events import EventType, SemanticEvent
 from vllm.grammar_parser.grammar_config import GrammarConfig, ParserState, Transition
 from vllm.grammar_parser.incremental_lexer import (
     IncrementalLexer,
+    LexToken,
     terminals_from_literals,
 )
 from vllm.grammar_parser.token_id_scanner import (
@@ -19,8 +19,6 @@ from vllm.grammar_parser.token_id_scanner import (
     TextChunk,
     TokenIDScanner,
 )
-
-logger = logging.getLogger(__name__)
 
 
 class StreamingParserEngine:
@@ -111,30 +109,15 @@ class StreamingParserEngine:
                         )
                     ]
                 return []
-            events: list[SemanticEvent] = []
-            for tok in lex_tokens:
-                if tok.terminal == "__CONTENT__":
-                    events.extend(self._on_content(tok.value))
-                else:
-                    events.extend(self._on_terminal(tok.terminal, tok.value))
-            return events
+            return self._process_lex_tokens(lex_tokens)
 
-        events = []
+        events: list[SemanticEvent] = []
         for item in scanner_items:
             if isinstance(item, PreLexedTerminal):
-                for tok in self._lexer.flush():
-                    if tok.terminal == "__CONTENT__":
-                        events.extend(self._on_content(tok.value))
-                    else:
-                        events.extend(self._on_terminal(tok.terminal, tok.value))
+                events.extend(self._process_lex_tokens(self._lexer.flush()))
                 events.extend(self._on_terminal(item.terminal, item.text))
             elif isinstance(item, TextChunk):
-                lex_tokens = self._lexer.feed(item.text)
-                for tok in lex_tokens:
-                    if tok.terminal == "__CONTENT__":
-                        events.extend(self._on_content(tok.value))
-                    else:
-                        events.extend(self._on_terminal(tok.terminal, tok.value))
+                events.extend(self._process_lex_tokens(self._lexer.feed(item.text)))
 
         return events
 
@@ -144,26 +127,12 @@ class StreamingParserEngine:
 
         for item in self._scanner.flush_pending():
             if isinstance(item, PreLexedTerminal):
-                for tok in self._lexer.flush():
-                    if tok.terminal == "__CONTENT__":
-                        events.extend(self._on_content(tok.value))
-                    else:
-                        events.extend(self._on_terminal(tok.terminal, tok.value))
+                events.extend(self._process_lex_tokens(self._lexer.flush()))
                 events.extend(self._on_terminal(item.terminal, item.text))
             elif isinstance(item, TextChunk):
-                lex_tokens = self._lexer.feed(item.text)
-                for tok in lex_tokens:
-                    if tok.terminal == "__CONTENT__":
-                        events.extend(self._on_content(tok.value))
-                    else:
-                        events.extend(self._on_terminal(tok.terminal, tok.value))
+                events.extend(self._process_lex_tokens(self._lexer.feed(item.text)))
 
-        remaining = self._lexer.flush()
-        for tok in remaining:
-            if tok.terminal == "__CONTENT__":
-                events.extend(self._on_content(tok.value))
-            else:
-                events.extend(self._on_terminal(tok.terminal, tok.value))
+        events.extend(self._process_lex_tokens(self._lexer.flush()))
 
         if self._args_buffer:
             events.append(
@@ -182,6 +151,16 @@ class StreamingParserEngine:
         token_ids: list[int] = []
         events = self.feed(text, token_ids)
         events.extend(self.finish())
+        return events
+
+    def _process_lex_tokens(self, tokens: list[LexToken]) -> list[SemanticEvent]:
+        """Dispatch a list of lex tokens through _on_content / _on_terminal."""
+        events: list[SemanticEvent] = []
+        for tok in tokens:
+            if tok.terminal == "__CONTENT__":
+                events.extend(self._on_content(tok.value))
+            else:
+                events.extend(self._on_terminal(tok.terminal, tok.value))
         return events
 
     def _on_terminal(self, terminal: str, value: str) -> list[SemanticEvent]:

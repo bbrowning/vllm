@@ -118,8 +118,8 @@ class GrammarToolParser(ToolParser):
             if not self._tool_call_ids[idx]:
                 continue
 
-            name = self._tool_names[idx] if idx < len(self._tool_names) else ""
-            raw_body = self._tool_args[idx] if idx < len(self._tool_args) else ""
+            name = self._tool_names[idx]
+            raw_body = self._tool_args[idx]
 
             if not name and raw_body.strip():
                 name, args_json = self._extract_name_and_args(raw_body)
@@ -154,6 +154,18 @@ class GrammarToolParser(ToolParser):
             content=content,
         )
 
+    @staticmethod
+    def _extract_args_value(parsed: dict) -> str | None:
+        """Return the arguments/parameters value from a parsed JSON dict,
+        or ``None`` if neither key is present."""
+        for key in ("arguments", "parameters"):
+            if key in parsed:
+                val = parsed[key]
+                if isinstance(val, str):
+                    return val
+                return json.dumps(val, ensure_ascii=False)
+        return None
+
     def _extract_name_and_args(
         self,
         raw_body: str,
@@ -171,12 +183,9 @@ class GrammarToolParser(ToolParser):
 
         name = parsed.get("name", "")
 
-        for key in ("arguments", "parameters"):
-            if key in parsed:
-                val = parsed[key]
-                if isinstance(val, str):
-                    return name, val
-                return name, json.dumps(val, ensure_ascii=False)
+        args = self._extract_args_value(parsed)
+        if args is not None:
+            return name, args
 
         without_name = {k: v for k, v in parsed.items() if k != "name"}
         return name, json.dumps(without_name, ensure_ascii=False)
@@ -200,16 +209,9 @@ class GrammarToolParser(ToolParser):
             return raw_args
 
         if isinstance(parsed, dict):
-            if "arguments" in parsed:
-                args_val = parsed["arguments"]
-                if isinstance(args_val, str):
-                    return args_val
-                return json.dumps(args_val, ensure_ascii=False)
-            if "parameters" in parsed:
-                params_val = parsed["parameters"]
-                if isinstance(params_val, str):
-                    return params_val
-                return json.dumps(params_val, ensure_ascii=False)
+            args = self._extract_args_value(parsed)
+            if args is not None:
+                return args
             if "name" in parsed:
                 without_name = {k: v for k, v in parsed.items() if k != "name"}
                 return json.dumps(without_name, ensure_ascii=False)
