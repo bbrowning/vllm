@@ -4,8 +4,9 @@
 
 Validates that ``GrammarQwen3ReasoningParser`` correctly handles
 ``<think>``/``</think>`` reasoning with Qwen3-specific extensions:
-- ``<tool_call>`` as implicit reasoning end
+- ``<tool_call>`` as implicit reasoning end (grammar terminal + token ID)
 - Stripping ``<think>`` from generated output (old template compat)
+- No terminal text (``</think>``, ``<tool_call>``) leaks into output
 """
 
 from unittest.mock import MagicMock
@@ -21,6 +22,14 @@ _TOOL_CALL_END_ID = 61
 _TEXT_ID = 100
 
 
+_SPECIAL_TOKEN_TEXT = {
+    _THINK_START_ID: "<think>",
+    _THINK_END_ID: "</think>",
+    _TOOL_CALL_ID: "<tool_call>",
+    _TOOL_CALL_END_ID: "</tool_call>",
+}
+
+
 def _make_tokenizer():
     tokenizer = MagicMock()
     tokenizer.encode.return_value = [1, 2, 3]
@@ -31,7 +40,7 @@ def _make_tokenizer():
         "</tool_call>": _TOOL_CALL_END_ID,
     }
     tokenizer.decode.side_effect = lambda ids: "".join(
-        chr(i) if i < 128 else f"<{i}>" for i in ids
+        _SPECIAL_TOKEN_TEXT.get(i, chr(i) if i < 128 else f"<{i}>") for i in ids
     )
     return tokenizer
 
@@ -123,7 +132,8 @@ class TestNonStreaming:
         reasoning, content = parser.extract_reasoning(text, None)
         assert reasoning == "I need to read the file.\n\n"
         assert content is not None
-        assert "<tool_call>" in content
+        assert "</think>" not in reasoning
+        assert "<tool_call>" not in reasoning
 
     def test_tool_call_implicit_end_no_think(self, parser):
         """<tool_call> as implicit end, no <think> in output."""
@@ -136,7 +146,45 @@ class TestNonStreaming:
         reasoning, content = parser.extract_reasoning(text, None)
         assert reasoning == "I need to read the file.\n\n"
         assert content is not None
-        assert "<tool_call>" in content
+        assert "<tool_call>" not in reasoning
+
+    def test_live_scenario_think_end_before_tool_call(self, parser):
+        """Real model output: </think> immediately before <tool_call>.
+
+        Regression test for the bug where </think> and <parameter=...>
+        leaked into reasoning content.
+        """
+        text = (
+            "The user wants to see what files are in the current directory"
+            " and their contents. Let me start by listing the directory."
+            "</think><tool_call><function=read>"
+            "<parameter=filePath>/Users/test/demo</parameter>"
+            "</function></tool_call>"
+        )
+        reasoning, content = parser.extract_reasoning(text, None)
+        expected_reasoning = (
+            "The user wants to see what files are in the current directory"
+            " and their contents. Let me start by listing the directory."
+        )
+        assert reasoning == expected_reasoning
+        assert "</think>" not in reasoning
+        assert "<tool_call>" not in reasoning
+        assert "<parameter=" not in reasoning
+        assert content is not None
+
+    def test_no_terminal_text_in_reasoning(self, parser):
+        """Terminal text must never appear in reasoning output."""
+        text = "Reasoning here.</think>Content here."
+        reasoning, content = parser.extract_reasoning(text, None)
+        assert "</think>" not in (reasoning or "")
+        assert "<think>" not in (reasoning or "")
+
+    def test_no_terminal_text_in_content(self, parser):
+        """Terminal text must never appear in content output."""
+        text = "Reasoning here.</think>Content here."
+        reasoning, content = parser.extract_reasoning(text, None)
+        assert "</think>" not in (content or "")
+        assert "<think>" not in (content or "")
 
 
 class TestIsReasoningEnd:
@@ -226,7 +274,9 @@ class TestStreaming:
             ],
         )
         assert reasoning == "I need to check."
-        assert "<tool_call>" in content
+        assert "<tool_call>" not in reasoning
+        assert "</think>" not in reasoning
+        assert content is not None
 
     def test_streaming_content_after_think_end(self, parser):
         """Content deltas after </think> are routed as content."""
@@ -255,8 +305,8 @@ class TestStreaming:
             ],
         )
         assert reasoning == "thinking"
-        assert "<tool_call>" in content
-        assert "<function=f>" in content
+        assert "<tool_call>" not in reasoning
+        assert content is not None
 
     def test_streaming_end_grouped_with_content(self, parser):
         """</think> grouped with following content in one delta."""
@@ -295,3 +345,45 @@ class TestStreaming:
         )
         assert reasoning == "hello world"
         assert content == ""
+
+    def test_streaming_think_end_and_tool_call_same_delta(self, parser):
+        """</think> and <tool_call> in the same delta — no leakage.
+
+        Regression test: the old override split at <tool_call> without
+        stripping </think>, causing </think> to leak into reasoning.
+        """
+        reasoning, content = _stream_and_collect(
+            parser,
+            [
+                "Let me list the directory.",
+                "</think><tool_call>",
+                "<function=read>",
+                "<parameter=filePath>/tmp</parameter>",
+            ],
+            [
+                (1,),
+                (_THINK_END_ID, _TOOL_CALL_ID),
+                (2,),
+                (3,),
+            ],
+        )
+        assert reasoning == "Let me list the directory."
+        assert "</think>" not in reasoning
+        assert "<tool_call>" not in reasoning
+        assert "<parameter=" not in reasoning
+        assert content is not None
+
+    def test_streaming_no_terminal_text_leaks(self, parser):
+        """Terminal text must never appear in reasoning or content."""
+        reasoning, content = _stream_and_collect(
+            parser,
+            ["reasoning", "</think>", "content"],
+            [
+                (1,),
+                (_THINK_END_ID,),
+                (2,),
+            ],
+        )
+        assert "</think>" not in reasoning
+        assert "</think>" not in content
+        assert "<think>" not in reasoning

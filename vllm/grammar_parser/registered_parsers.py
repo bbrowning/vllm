@@ -53,6 +53,8 @@ def _qwen3_reasoning_config() -> GrammarConfig:
     Starts in REASONING state because Qwen3.5+ chat templates place
     ``<think>`` in the prompt, so generated output begins mid-reasoning.
     ``<think>`` in output (old templates) is consumed as a no-op.
+    ``<tool_call>`` acts as an implicit reasoning end — the model may
+    emit it inside thinking without closing ``</think>`` first.
     """
     return GrammarConfig(
         name="qwen3_reasoning",
@@ -60,10 +62,12 @@ def _qwen3_reasoning_config() -> GrammarConfig:
         terminals={
             "THINK_START": "<think>",
             "THINK_END": "</think>",
+            "TOOL_CALL_START": "<tool_call>",
         },
         token_id_terminals={
             "THINK_START": "<think>",
             "THINK_END": "</think>",
+            "TOOL_CALL_START": "<tool_call>",
         },
         transitions={
             (ParserState.REASONING, "THINK_START"): Transition(
@@ -71,6 +75,10 @@ def _qwen3_reasoning_config() -> GrammarConfig:
                 [],
             ),
             (ParserState.REASONING, "THINK_END"): Transition(
+                ParserState.CONTENT,
+                [EventType.REASONING_END],
+            ),
+            (ParserState.REASONING, "TOOL_CALL_START"): Transition(
                 ParserState.CONTENT,
                 [EventType.REASONING_END],
             ),
@@ -88,10 +96,11 @@ class GrammarQwen3ReasoningParser(GrammarReasoningParser):
     Uses ``initial_state=REASONING`` so output without ``<think>``
     (Qwen3.5+ style where ``<think>`` is in the prompt) is correctly
     treated as reasoning. ``<think>`` in output (old template) is
-    consumed as a no-op transition.
+    consumed as a no-op transition. ``<tool_call>`` is handled as an
+    implicit reasoning end by the grammar config.
 
     Extends :class:`GrammarReasoningParser` with:
-    - ``<tool_call>`` as implicit reasoning end (token ID detection)
+    - ``is_reasoning_end`` that detects unpaired ``<tool_call>`` tokens
     """
 
     def __init__(self, tokenizer: TokenizerLike, **kwargs) -> None:
@@ -119,62 +128,6 @@ class GrammarQwen3ReasoningParser(GrammarReasoningParser):
                         continue
                     return True
         return False
-
-    def extract_reasoning_streaming(
-        self,
-        previous_text: str,
-        current_text: str,
-        delta_text: str,
-        previous_token_ids: Sequence[int],
-        current_token_ids: Sequence[int],
-        delta_token_ids: Sequence[int],
-    ) -> DeltaMessage | None:
-        tool_call_id = self._tool_call_token_id
-        if tool_call_id is not None and tool_call_id in delta_token_ids:
-            tool_tag = "<tool_call>"
-            tool_idx = delta_text.find(tool_tag)
-            if tool_idx >= 0:
-                reasoning_part = delta_text[:tool_idx]
-                content_part = delta_text[tool_idx:]
-                self._reasoning_ended = True
-                return DeltaMessage(
-                    reasoning=reasoning_part if reasoning_part else None,
-                    content=content_part if content_part else None,
-                )
-
-        end_id = self._reasoning_end_token_id
-        if end_id is not None and end_id in previous_token_ids:
-            if delta_text:
-                return DeltaMessage(content=delta_text)
-            return None
-        if tool_call_id is not None and tool_call_id in previous_token_ids:
-            if delta_text:
-                return DeltaMessage(content=delta_text)
-            return None
-
-        return super().extract_reasoning_streaming(
-            previous_text,
-            current_text,
-            delta_text,
-            previous_token_ids,
-            current_token_ids,
-            delta_token_ids,
-        )
-
-    def extract_reasoning(
-        self,
-        model_output: str,
-        request: ChatCompletionRequest | ResponsesRequest,
-    ) -> tuple[str | None, str | None]:
-        reasoning, content = super().extract_reasoning(model_output, request)
-
-        if reasoning is not None and content is None:
-            tool_idx = reasoning.find("<tool_call>")
-            if tool_idx != -1:
-                content = reasoning[tool_idx:]
-                reasoning = reasoning[:tool_idx] or None
-
-        return reasoning, content
 
 
 class GrammarGemma4ToolParser(GrammarToolParser):
