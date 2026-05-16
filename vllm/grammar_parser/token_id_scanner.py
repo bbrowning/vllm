@@ -53,6 +53,7 @@ class TokenIDScanner:
         self._token_text_cache: dict[int, str] = {}
         self._drop_token_ids = drop_token_ids or set()
         self._deferred_terminals: list[PreLexedTerminal] = []
+        self._deferred_post_text: str = ""
 
     def _decode_token(self, token_id: int) -> str:
         if token_id not in self._token_text_cache:
@@ -140,9 +141,13 @@ class TokenIDScanner:
 
     def flush_pending(self) -> list[LexerInput]:
         """Emit any deferred terminals at end-of-stream."""
-        if not self._deferred_terminals:
+        if not self._deferred_terminals and not self._deferred_post_text:
             return []
-        results: list[LexerInput] = list(self._deferred_terminals)
+        results: list[LexerInput] = []
+        if self._deferred_post_text:
+            results.append(TextChunk(self._deferred_post_text))
+            self._deferred_post_text = ""
+        results.extend(self._deferred_terminals)
         self._deferred_terminals.clear()
         return results
 
@@ -168,6 +173,10 @@ class TokenIDScanner:
 
         results: list[LexerInput] = []
         remaining = delta_text
+
+        if self._deferred_post_text:
+            remaining = self._deferred_post_text + remaining
+            self._deferred_post_text = ""
 
         for terminal in deferred:
             pos = remaining.find(terminal.text)
@@ -241,10 +250,10 @@ class TokenIDScanner:
                 remaining = remaining[len(item.text) :]
             else:
                 # Terminal text not in delta_text — detokenizer hasn't
-                # flushed it yet.  Emit remaining text (belongs to the
-                # current parser state) and defer the terminal.
+                # flushed it yet.  Store remaining text so it can be
+                # replayed after the terminal fires in _resolve_deferred.
                 if remaining:
-                    new_results.append(TextChunk(remaining))
+                    self._deferred_post_text += remaining
                     remaining = ""
                 self._deferred_terminals.append(item)
         if remaining:

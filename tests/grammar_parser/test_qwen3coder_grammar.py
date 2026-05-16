@@ -184,6 +184,29 @@ class TestNonStreaming:
         assert args["content"] == 'He said "hello"'
         assert args["path"] == "C:\\Users\\file.txt"
 
+    def test_multiline_param_values(self, parser, mock_request):
+        """Parameter values spanning multiple lines."""
+        text = (
+            "<tool_call>\n"
+            "<function=Bash>\n"
+            "<parameter=command>\n"
+            "ls -la /tmp\n"
+            "</parameter>\n"
+            "<parameter=description>\n"
+            "List files in /tmp directory\n"
+            "</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+        result = parser.extract_tool_calls(text, mock_request)
+
+        assert result.tools_called is True
+        assert len(result.tool_calls) == 1
+        assert result.tool_calls[0].function.name == "Bash"
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args["command"] == "ls -la /tmp"
+        assert args["description"] == "List files in /tmp directory"
+
 
 class TestStreaming:
     def _simulate_streaming(
@@ -383,3 +406,174 @@ class TestStreaming:
         assert args_text
         parsed = json.loads(args_text)
         assert parsed == {"msg": "hi"}
+
+    def test_streaming_multiline_param_values(self, parser, mock_request):
+        """Multi-line parameter values in streaming mode."""
+        chunks = [
+            "<tool_call>\n",
+            "<function=Bash>\n",
+            "<parameter=command>\n",
+            "ls -la /tmp\n",
+            "</parameter>\n",
+            "<parameter=description>\n",
+            "List files\n",
+            "</parameter>\n",
+            "</function>\n",
+            "</tool_call>",
+        ]
+        results = self._simulate_streaming(parser, mock_request, chunks)
+
+        name = self._collect_function_name(results)
+        assert name == "Bash"
+
+        args_text = self._collect_arguments(results)
+        assert args_text
+        parsed = json.loads(args_text)
+        assert "ls -la /tmp" in parsed["command"]
+        assert "List files" in parsed["description"]
+
+    def test_streaming_multiline_two_tool_calls(self, parser, mock_request):
+        """Two tool calls with multi-line values — matches bug report."""
+        chunks = [
+            "<tool_call>\n",
+            "<function=Bash>\n",
+            "<parameter=command>\n",
+            "find /workspace -name '*.py' | head -20\n",
+            "</parameter>\n",
+            "<parameter=description>\n",
+            "Find Python files\n",
+            "</parameter>\n",
+            "</function>\n",
+            "</tool_call>",
+            "<tool_call>\n",
+            "<function=Read>\n",
+            "<parameter=file_path>\n",
+            "/workspace/main.py\n",
+            "</parameter>\n",
+            "</function>\n",
+            "</tool_call>",
+        ]
+        results = self._simulate_streaming(parser, mock_request, chunks)
+
+        names = []
+        for delta, _ in results:
+            if delta and delta.tool_calls:
+                for tc in delta.tool_calls:
+                    if tc.function and tc.function.name:
+                        names.append(tc.function.name)
+
+        assert "Bash" in names
+        assert "Read" in names
+
+
+class TestStreamingWithSpecialTokenIDs:
+    """Tests simulating skip_special_tokens=True stripping <tool_call>."""
+
+    @pytest.fixture
+    def special_tokenizer(self):
+        special_tokens = {TOOL_CALL_START: 100, TOOL_CALL_END: 101}
+        reverse = {v: k for k, v in special_tokens.items()}
+        tokenizer = MagicMock()
+        tokenizer.encode.return_value = [1, 2, 3]
+        tokenizer.get_vocab.return_value = special_tokens
+        tokenizer.decode.side_effect = lambda ids: "".join(
+            reverse.get(i, chr(i) if i < 128 else f"<{i}>") for i in ids
+        )
+        return tokenizer
+
+    @pytest.fixture
+    def parser(self, special_tokenizer):
+        return GrammarQwen3CoderToolParser(special_tokenizer)
+
+    def _simulate_streaming_with_token_ids(
+        self,
+        parser: GrammarQwen3CoderToolParser,
+        mock_request,
+        deltas: list[tuple[str, list[int]]],
+    ) -> list[tuple[Any, str]]:
+        results: list[tuple[Any, str]] = []
+        previous_text = ""
+        previous_token_ids: list[int] = []
+
+        for delta_text, delta_tids in deltas:
+            current_text = previous_text + delta_text
+            current_token_ids = previous_token_ids + delta_tids
+
+            delta = parser.extract_tool_calls_streaming(
+                previous_text=previous_text,
+                current_text=current_text,
+                delta_text=delta_text,
+                previous_token_ids=tuple(previous_token_ids),
+                current_token_ids=tuple(current_token_ids),
+                delta_token_ids=tuple(delta_tids),
+                request=mock_request,
+            )
+            results.append((delta, current_text))
+            previous_text = current_text
+            previous_token_ids = list(current_token_ids)
+
+        return results
+
+    def _collect_arguments(self, results):
+        args_text = ""
+        for delta, _ in results:
+            if delta and delta.tool_calls:
+                for tc in delta.tool_calls:
+                    if tc.function and tc.function.arguments:
+                        args_text += tc.function.arguments
+        return args_text
+
+    def _collect_function_name(self, results):
+        for delta, _ in results:
+            if delta and delta.tool_calls:
+                for tc in delta.tool_calls:
+                    if tc.function and tc.function.name:
+                        return tc.function.name
+        return None
+
+    def test_deferred_tool_call_with_function_in_same_delta(self, parser, mock_request):
+        """<tool_call> token ID present but text stripped."""
+        deltas = [
+            ("\n<function=get_weather>\n", [100, 1, 2, 3, 4]),
+            ("<parameter=city>Tokyo</parameter>\n", [5, 6, 7, 8]),
+            ("</function>\n", [9, 10]),
+            ("", [101]),
+        ]
+        results = self._simulate_streaming_with_token_ids(parser, mock_request, deltas)
+
+        name = self._collect_function_name(results)
+        assert name == "get_weather"
+
+        args_text = self._collect_arguments(results)
+        assert args_text
+        parsed = json.loads(args_text)
+        assert parsed == {"city": "Tokyo"}
+
+    def test_deferred_tool_call_multiline_params(self, parser, mock_request):
+        """<tool_call> stripped + multi-line params — full bug scenario."""
+        deltas = [
+            (
+                "\n<function=Bash>\n<parameter=command>\n",
+                [100, 1, 2, 3, 4, 5],
+            ),
+            (
+                "find /workspace -name '*.py' | head -20\n</parameter>\n",
+                [6, 7, 8, 9, 10],
+            ),
+            (
+                "<parameter=description>\nFind Python files\n</parameter>\n",
+                [11, 12, 13, 14, 15],
+            ),
+            ("</function>\n", [16, 17]),
+            ("", [101]),
+        ]
+        results = self._simulate_streaming_with_token_ids(parser, mock_request, deltas)
+
+        name = self._collect_function_name(results)
+        assert name == "Bash"
+
+        args_text = self._collect_arguments(results)
+        assert args_text
+        parsed = json.loads(args_text)
+        assert "find /workspace" in parsed["command"]
+        assert "Find Python files" in parsed["description"]
