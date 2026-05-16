@@ -83,3 +83,7 @@ class GrammarConfig:
     strip_trailing_quotes: bool = True
 
     tool_args_json: bool = True
+
+    arg_structural_chars: frozenset[str] | None = None
+
+    drop_tokens: set[str] = field(default_factory=set)

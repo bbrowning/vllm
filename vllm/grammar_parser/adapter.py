@@ -59,12 +59,22 @@ class GrammarToolParser(ToolParser):
         model_output: str,
         request: ChatCompletionRequest,
     ) -> ExtractedToolCallInformation:
-        engine = StreamingParserEngine(
-            self.grammar_config,
-            self.model_tokenizer,
+        self._reset_streaming_state()
+
+        result = self.extract_tool_calls_streaming(
+            previous_text="",
+            current_text=model_output,
+            delta_text=model_output,
+            previous_token_ids=[],
+            current_token_ids=[],
+            delta_token_ids=[],
+            request=request,
         )
-        events = engine.parse_complete(model_output)
-        return self._events_to_extracted(events)
+
+        finish_events = self._engine.finish()
+        finish_delta = self._events_to_delta(finish_events) if finish_events else None
+
+        return self._build_extracted_result(result, finish_delta)
 
     def extract_tool_calls_streaming(
         self,
@@ -93,31 +103,23 @@ class GrammarToolParser(ToolParser):
         self._name_sent.clear()
         self._streamed_json.clear()
 
-    def _events_to_extracted(
+    def _build_extracted_result(
         self,
-        events: list[SemanticEvent],
+        *deltas: DeltaMessage | None,
     ) -> ExtractedToolCallInformation:
-        names: dict[int, str] = {}
-        args: dict[int, list[str]] = {}
+        """Build ExtractedToolCallInformation from accumulated streaming state."""
         content_parts: list[str] = []
-        tool_indices: set[int] = set()
-
-        for event in events:
-            if event.type == EventType.TOOL_CALL_START:
-                tool_indices.add(event.tool_index)
-            elif event.type == EventType.TOOL_NAME:
-                names[event.tool_index] = event.value
-            elif event.type == EventType.ARG_VALUE_CHUNK:
-                args.setdefault(event.tool_index, []).append(event.value)
-                tool_indices.add(event.tool_index)
-            elif event.type == EventType.TEXT_CHUNK:
-                content_parts.append(event.value)
+        for delta in deltas:
+            if delta is not None and delta.content:
+                content_parts.append(delta.content)
 
         tool_calls: list[ToolCall] = []
-        for idx in sorted(tool_indices):
-            raw_body = "".join(args.get(idx, []))
-            name = names.get(idx, "")
-            args_json = "{}"
+        for idx in range(len(self._tool_call_ids)):
+            if not self._tool_call_ids[idx]:
+                continue
+
+            name = self._tool_names[idx] if idx < len(self._tool_names) else ""
+            raw_body = self._tool_args[idx] if idx < len(self._tool_args) else ""
 
             if not name and raw_body.strip():
                 name, args_json = self._extract_name_and_args(raw_body)
@@ -127,17 +129,16 @@ class GrammarToolParser(ToolParser):
                     try:
                         args_json = converter(raw_body, False)
                     except Exception:
-                        args_json = self._extract_args_json(
-                            raw_body,
-                            name,
-                        )
+                        args_json = self._extract_args_json(raw_body, name)
                 else:
                     args_json = self._extract_args_json(raw_body, name)
+            else:
+                args_json = "{}"
 
             if name:
                 tool_calls.append(
                     ToolCall(
-                        id=make_tool_call_id(),
+                        id=self._tool_call_ids[idx],
                         function=FunctionCall(name=name, arguments=args_json),
                     )
                 )
@@ -350,6 +351,10 @@ class GrammarToolParser(ToolParser):
         if not self.grammar_config.strip_trailing_quotes:
             return None
 
+        structural = self.grammar_config.arg_structural_chars
+        if structural is not None and structural.isdisjoint(raw_delta):
+            return None
+
         accumulated = self._tool_args[idx]
         try:
             current_json = converter(accumulated, True)
@@ -451,6 +456,39 @@ class GrammarReasoningParser(ReasoningParser):
     def reasoning_end_str(self) -> str | None:
         return self.grammar_config.token_id_terminals.get("THINK_END")
 
+    def has_reasoning_ended(self) -> bool | None:
+        return self._reasoning_ended
+
+    def _reset_streaming_state(self) -> None:
+        """Reset all streaming state for a new request."""
+        self._engine = StreamingParserEngine(
+            self.grammar_config,
+            self.model_tokenizer,
+        )
+        self._reasoning_ended = False
+
+    def _process_reasoning_events(
+        self,
+        events: list[SemanticEvent],
+    ) -> DeltaMessage | None:
+        """Process semantic events into a reasoning DeltaMessage."""
+        reasoning_parts: list[str] = []
+        content_parts: list[str] = []
+        for event in events:
+            if event.type == EventType.REASONING_CHUNK:
+                reasoning_parts.append(event.value)
+            elif event.type == EventType.TEXT_CHUNK:
+                content_parts.append(event.value)
+            elif event.type == EventType.REASONING_END:
+                self._reasoning_ended = True
+
+        reasoning = "".join(reasoning_parts) or None
+        content = "".join(content_parts) or None
+
+        if reasoning or content:
+            return DeltaMessage(reasoning=reasoning, content=content)
+        return None
+
     def is_reasoning_end(self, input_ids: Sequence[int]) -> bool:
         end_id = self._reasoning_end_token_id
         start_id = self._reasoning_start_token_id
@@ -479,19 +517,27 @@ class GrammarReasoningParser(ReasoningParser):
         model_output: str,
         request,
     ) -> tuple[str | None, str | None]:
-        engine = StreamingParserEngine(
-            self.grammar_config,
-            self.model_tokenizer,
+        self._reset_streaming_state()
+
+        result = self.extract_reasoning_streaming(
+            previous_text="",
+            current_text=model_output,
+            delta_text=model_output,
+            previous_token_ids=[],
+            current_token_ids=[],
+            delta_token_ids=[],
         )
-        events = engine.parse_complete(model_output)
+
+        finish_result = self._process_reasoning_events(self._engine.finish())
 
         reasoning_parts: list[str] = []
         content_parts: list[str] = []
-        for event in events:
-            if event.type == EventType.REASONING_CHUNK:
-                reasoning_parts.append(event.value)
-            elif event.type == EventType.TEXT_CHUNK:
-                content_parts.append(event.value)
+        for delta in (result, finish_result):
+            if delta is not None:
+                if delta.reasoning:
+                    reasoning_parts.append(delta.reasoning)
+                if delta.content:
+                    content_parts.append(delta.content)
 
         reasoning = "".join(reasoning_parts) or None
         content = "".join(content_parts) or None
@@ -507,20 +553,4 @@ class GrammarReasoningParser(ReasoningParser):
         delta_token_ids: Sequence[int],
     ) -> DeltaMessage | None:
         events = self._engine.feed(delta_text, delta_token_ids)
-
-        reasoning_parts: list[str] = []
-        content_parts: list[str] = []
-        for event in events:
-            if event.type == EventType.REASONING_CHUNK:
-                reasoning_parts.append(event.value)
-            elif event.type == EventType.TEXT_CHUNK:
-                content_parts.append(event.value)
-            elif event.type == EventType.REASONING_END:
-                self._reasoning_ended = True
-
-        reasoning = "".join(reasoning_parts) or None
-        content = "".join(content_parts) or None
-
-        if reasoning or content:
-            return DeltaMessage(reasoning=reasoning, content=content)
-        return None
+        return self._process_reasoning_events(events)

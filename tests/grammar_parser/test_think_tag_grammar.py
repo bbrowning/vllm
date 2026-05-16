@@ -12,17 +12,56 @@ from unittest.mock import MagicMock
 import pytest
 
 from vllm.grammar_parser.adapter import GrammarReasoningParser
+from vllm.grammar_parser.events import EventType
 from vllm.grammar_parser.grammars.think_tag import think_tag_config
+from vllm.grammar_parser.parser_engine import StreamingParserEngine
+from vllm.grammar_parser.token_id_scanner import (
+    PreLexedTerminal,
+    TextChunk,
+    TokenIDScanner,
+)
+
+# Token IDs used in tests
+_START_ID = 50
+_END_ID = 51
+_DROP_ID = 52
+_TEXT_ID = 100
 
 
 def _make_tokenizer(start_tag: str, end_tag: str):
     tokenizer = MagicMock()
     tokenizer.encode.return_value = [1, 2, 3]
-    vocab = {start_tag: 50, end_tag: 51}
+    vocab = {start_tag: _START_ID, end_tag: _END_ID}
     tokenizer.get_vocab.return_value = vocab
     tokenizer.decode.side_effect = lambda ids: "".join(
         chr(i) if i < 128 else f"<{i}>" for i in ids
     )
+    return tokenizer
+
+
+def _make_tokenizer_with_text_map(
+    start_tag: str,
+    end_tag: str,
+    token_text_map: dict[int, str],
+):
+    """Tokenizer mock where decode([tid]) returns a specific string."""
+    tokenizer = MagicMock()
+    tokenizer.encode.return_value = [1, 2, 3]
+    vocab = {start_tag: _START_ID, end_tag: _END_ID}
+    tokenizer.get_vocab.return_value = vocab
+
+    def _decode(ids):
+        parts = []
+        for tid in ids:
+            if tid in token_text_map:
+                parts.append(token_text_map[tid])
+            elif tid < 128:
+                parts.append(chr(tid))
+            else:
+                parts.append(f"<{tid}>")
+        return "".join(parts)
+
+    tokenizer.decode.side_effect = _decode
     return tokenizer
 
 
@@ -237,3 +276,194 @@ class TestEmptyReasoning:
         assert reasoning == "let me think"
         assert "Hmm, " in content
         assert "OK got it." in content
+
+
+class TestDetokenizerHoldback:
+    """TokenIDScanner must not lose text from detokenizer hold-back.
+
+    The detokenizer may flush previously held-back text in delta_text
+    that has no token ID in delta_token_ids.  The scanner must emit
+    this text as a TextChunk.
+    """
+
+    def test_holdback_text_before_special_token(self):
+        """Held-back text preceding a special token must be preserved."""
+        token_map = {_END_ID: "</think>"}
+        tokenizer = _make_tokenizer_with_text_map("<think>", "</think>", token_map)
+        scanner = TokenIDScanner(
+            {_END_ID: "THINK_END"},
+            tokenizer,
+        )
+        # delta_text has "'ll" from hold-back + "</think>" from new token
+        # delta_token_ids has only the end token
+        items = scanner.scan("'ll</think>", [_END_ID])
+        assert len(items) == 2
+        assert isinstance(items[0], TextChunk)
+        assert items[0].text == "'ll"
+        assert isinstance(items[1], PreLexedTerminal)
+        assert items[1].terminal == "THINK_END"
+
+    def test_holdback_text_before_text_and_special(self):
+        """Held-back text + regular text + special token."""
+        token_map = {_TEXT_ID: " world", _END_ID: "</think>"}
+        tokenizer = _make_tokenizer_with_text_map("<think>", "</think>", token_map)
+        scanner = TokenIDScanner(
+            {_END_ID: "THINK_END"},
+            tokenizer,
+        )
+        items = scanner.scan("llo world</think>", [_TEXT_ID, _END_ID])
+        texts = [item.text for item in items if isinstance(item, TextChunk)]
+        assert "llo" in "".join(texts)
+        assert " world" in "".join(texts)
+
+    def test_holdback_with_all_drop_tokens(self):
+        """When all tokens are dropped, delta_text is entirely hold-back."""
+        token_map = {_DROP_ID: "<drop>"}
+        tokenizer = _make_tokenizer_with_text_map("<think>", "</think>", token_map)
+        scanner = TokenIDScanner(
+            {},
+            tokenizer,
+            drop_token_ids={_DROP_ID},
+        )
+        items = scanner.scan("remaining text", [_DROP_ID])
+        assert len(items) == 1
+        assert isinstance(items[0], TextChunk)
+        assert items[0].text == "remaining text"
+
+    def test_no_holdback_no_change(self):
+        """When delta_text matches reconstructed text, no extra TextChunk."""
+        token_map = {_END_ID: "</think>"}
+        tokenizer = _make_tokenizer_with_text_map("<think>", "</think>", token_map)
+        scanner = TokenIDScanner(
+            {_END_ID: "THINK_END"},
+            tokenizer,
+        )
+        items = scanner.scan("</think>", [_END_ID])
+        assert len(items) == 1
+        assert isinstance(items[0], PreLexedTerminal)
+
+    def test_holdback_streaming_reasoning_preserved(self):
+        """End-to-end: hold-back text at reasoning end is emitted as
+        reasoning, not lost."""
+        start_tag = "<think>"
+        end_tag = "</think>"
+        token_map = {
+            _START_ID: start_tag,
+            _END_ID: end_tag,
+            _TEXT_ID: "I'",
+        }
+        tokenizer = _make_tokenizer_with_text_map(start_tag, end_tag, token_map)
+        config = think_tag_config(start_tag=start_tag, end_tag=end_tag)
+        parser = GrammarReasoningParser(tokenizer, grammar_config=config)
+
+        reasoning_parts: list[str] = []
+        content_parts: list[str] = []
+
+        # Step 1: <think> token
+        d = parser.extract_reasoning_streaming(
+            "", start_tag, start_tag, (), (_START_ID,), (_START_ID,)
+        )
+        if d and d.reasoning:
+            reasoning_parts.append(d.reasoning)
+
+        # Step 2: text token "I'" (detokenizer held back "'ll")
+        d = parser.extract_reasoning_streaming(
+            start_tag,
+            start_tag + "I'",
+            "I'",
+            (_START_ID,),
+            (_START_ID, _TEXT_ID),
+            (_TEXT_ID,),
+        )
+        if d and d.reasoning:
+            reasoning_parts.append(d.reasoning)
+
+        # Step 3: </think> token, but delta_text = "ll</think>"
+        # because detokenizer flushed the held-back "ll"
+        d = parser.extract_reasoning_streaming(
+            start_tag + "I'",
+            start_tag + "I'll" + end_tag,
+            "ll" + end_tag,
+            (_START_ID, _TEXT_ID),
+            (_START_ID, _TEXT_ID, _END_ID),
+            (_END_ID,),
+        )
+        if d and d.reasoning:
+            reasoning_parts.append(d.reasoning)
+        if d and d.content:
+            content_parts.append(d.content)
+
+        # Step 4: content "done"
+        d = parser.extract_reasoning_streaming(
+            start_tag + "I'll" + end_tag,
+            start_tag + "I'll" + end_tag + "done",
+            "done",
+            (_START_ID, _TEXT_ID, _END_ID),
+            (_START_ID, _TEXT_ID, _END_ID, 200),
+            (200,),
+        )
+        if d and d.content:
+            content_parts.append(d.content)
+
+        assert "".join(reasoning_parts) == "I'll"
+        assert "".join(content_parts) == "done"
+
+
+class TestLexerBufferFlush:
+    """Lexer buffer must be flushed before PreLexedTerminal transitions."""
+
+    def test_buffered_prefix_emitted_in_current_state(self):
+        """Text buffered by the lexer (e.g. '<') must be emitted as
+        REASONING_CHUNK before THINK_END transitions to CONTENT."""
+        start_tag = "<think>"
+        end_tag = "</think>"
+        token_map = {
+            _START_ID: start_tag,
+            _END_ID: end_tag,
+        }
+        tokenizer = _make_tokenizer_with_text_map(start_tag, end_tag, token_map)
+        config = think_tag_config(start_tag=start_tag, end_tag=end_tag)
+        engine = StreamingParserEngine(config, tokenizer)
+
+        # Start reasoning
+        events = engine.feed(start_tag, [_START_ID])
+        assert any(e.type == EventType.REASONING_START for e in events)
+
+        # Feed text ending with '<' — the lexer buffers '<' because
+        # it is a prefix of both "<think>" and "</think>".
+        events = engine.feed("reasoning text<", [])
+        reasoning_text = "".join(
+            e.value for e in events if e.type == EventType.REASONING_CHUNK
+        )
+        assert "reasoning text" in reasoning_text
+
+        # End token arrives via token ID — lexer buffer should flush
+        # the '<' as REASONING_CHUNK before the state transition.
+        events = engine.feed(end_tag, [_END_ID])
+        event_types = [e.type for e in events]
+        if EventType.REASONING_CHUNK in event_types:
+            rc_idx = event_types.index(EventType.REASONING_CHUNK)
+            re_idx = event_types.index(EventType.REASONING_END)
+            assert rc_idx < re_idx, (
+                "'<' must be emitted as REASONING_CHUNK before REASONING_END"
+            )
+            flushed = events[rc_idx].value
+            assert "<" in flushed
+
+    def test_empty_buffer_no_extra_events(self):
+        """When the lexer buffer is empty, flushing is a no-op."""
+        start_tag = "<think>"
+        end_tag = "</think>"
+        token_map = {_START_ID: start_tag, _END_ID: end_tag}
+        tokenizer = _make_tokenizer_with_text_map(start_tag, end_tag, token_map)
+        config = think_tag_config(start_tag=start_tag, end_tag=end_tag)
+        engine = StreamingParserEngine(config, tokenizer)
+
+        engine.feed(start_tag, [_START_ID])
+        engine.feed("clean text", [])
+
+        events = engine.feed(end_tag, [_END_ID])
+        assert any(e.type == EventType.REASONING_END for e in events)
+        # No stale REASONING_CHUNK from empty buffer
+        chunk_events = [e for e in events if e.type == EventType.REASONING_CHUNK]
+        assert all(e.value for e in chunk_events)

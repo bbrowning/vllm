@@ -231,3 +231,188 @@ class TestGrammarReasoningParser:
         )
         assert parser.extract_content_ids([100, 50, 51, 101, 60, 70]) == [60, 70]
         assert parser.extract_content_ids([50, 51, 60]) == [50, 51, 60]
+
+
+def _simulate_streaming_reasoning(parser, text):
+    """Feed text char-by-char through streaming and return combined result."""
+    all_deltas = []
+    for i, ch in enumerate(text):
+        delta = parser.extract_reasoning_streaming(
+            previous_text=text[:i],
+            current_text=text[: i + 1],
+            delta_text=ch,
+            previous_token_ids=[],
+            current_token_ids=[],
+            delta_token_ids=[],
+        )
+        if delta is not None:
+            all_deltas.append(delta)
+    reasoning = "".join(d.reasoning for d in all_deltas if d.reasoning)
+    content = "".join(d.content for d in all_deltas if d.content)
+    return reasoning or None, content or None
+
+
+def _simulate_streaming_tool(parser, text, request):
+    """Feed text char-by-char through streaming and collect results."""
+    all_deltas = []
+    for i, ch in enumerate(text):
+        delta = parser.extract_tool_calls_streaming(
+            previous_text=text[:i],
+            current_text=text[: i + 1],
+            delta_text=ch,
+            previous_token_ids=[],
+            current_token_ids=[],
+            delta_token_ids=[],
+            request=request,
+        )
+        if delta is not None:
+            all_deltas.append(delta)
+    return all_deltas
+
+
+class TestStreamingNonStreamingEquivalence:
+    """Verify that streaming and non-streaming produce equivalent results."""
+
+    def test_reasoning_equivalence(self):
+        text = "<think>Let me think about this</think>The answer is 42"
+
+        non_streaming_parser = GrammarReasoningParser(
+            _mock_tokenizer(),
+            grammar_config=_think_config(),
+        )
+        ns_reasoning, ns_content = non_streaming_parser.extract_reasoning(
+            text, _mock_request()
+        )
+
+        streaming_parser = GrammarReasoningParser(
+            _mock_tokenizer(),
+            grammar_config=_think_config(),
+        )
+        s_reasoning, s_content = _simulate_streaming_reasoning(streaming_parser, text)
+
+        assert ns_reasoning == s_reasoning
+        assert ns_content == s_content
+
+    def test_reasoning_only_equivalence(self):
+        text = "<think>Just thinking, no answer</think>"
+
+        non_streaming_parser = GrammarReasoningParser(
+            _mock_tokenizer(),
+            grammar_config=_think_config(),
+        )
+        ns_reasoning, ns_content = non_streaming_parser.extract_reasoning(
+            text, _mock_request()
+        )
+
+        streaming_parser = GrammarReasoningParser(
+            _mock_tokenizer(),
+            grammar_config=_think_config(),
+        )
+        s_reasoning, s_content = _simulate_streaming_reasoning(streaming_parser, text)
+
+        assert ns_reasoning == s_reasoning
+        assert ns_content == s_content
+
+    def test_content_only_equivalence(self):
+        text = "Just plain text, no thinking"
+
+        non_streaming_parser = GrammarReasoningParser(
+            _mock_tokenizer(),
+            grammar_config=_think_config(),
+        )
+        ns_reasoning, ns_content = non_streaming_parser.extract_reasoning(
+            text, _mock_request()
+        )
+
+        streaming_parser = GrammarReasoningParser(
+            _mock_tokenizer(),
+            grammar_config=_think_config(),
+        )
+        s_reasoning, s_content = _simulate_streaming_reasoning(streaming_parser, text)
+
+        assert ns_reasoning == s_reasoning
+        assert ns_content == s_content
+
+    def test_tool_single_equivalence(self):
+        text = (
+            '<tool_call>{"name": "get_weather",'
+            ' "arguments": {"city": "NYC"}}</tool_call>'
+        )
+
+        ns_parser = GrammarToolParser(
+            _mock_tokenizer(),
+            grammar_config=_hermes_config(),
+        )
+        ns_result = ns_parser.extract_tool_calls(text, _mock_request())
+
+        s_parser = GrammarToolParser(
+            _mock_tokenizer(),
+            grammar_config=_hermes_config(),
+        )
+        s_deltas = _simulate_streaming_tool(s_parser, text, _mock_request())
+
+        assert ns_result.tools_called
+        assert len(ns_result.tool_calls) == 1
+        assert ns_result.tool_calls[0].function.name == "get_weather"
+
+        s_names = [
+            d.tool_calls[0].function.name
+            for d in s_deltas
+            if d.tool_calls
+            and d.tool_calls[0].function
+            and d.tool_calls[0].function.name is not None
+        ]
+        assert any("get_weather" in n for n in s_names)
+
+    def test_tool_with_content_equivalence(self):
+        text = (
+            "Sure, let me help!"
+            '<tool_call>{"name": "add", "arguments": {"a": 1}}</tool_call>'
+        )
+
+        ns_parser = GrammarToolParser(
+            _mock_tokenizer(),
+            grammar_config=_hermes_config(),
+        )
+        ns_result = ns_parser.extract_tool_calls(text, _mock_request())
+
+        s_parser = GrammarToolParser(
+            _mock_tokenizer(),
+            grammar_config=_hermes_config(),
+        )
+        s_deltas = _simulate_streaming_tool(s_parser, text, _mock_request())
+
+        assert ns_result.tools_called
+        assert ns_result.content == "Sure, let me help!"
+
+        s_content = "".join(d.content for d in s_deltas if d.content)
+        assert "Sure, let me help!" in s_content
+
+    def test_tool_multiple_equivalence(self):
+        text = (
+            '<tool_call>{"name": "a", "arguments": {}}</tool_call>'
+            '<tool_call>{"name": "b", "arguments": {"x": 1}}</tool_call>'
+        )
+
+        ns_parser = GrammarToolParser(
+            _mock_tokenizer(),
+            grammar_config=_hermes_config(),
+        )
+        ns_result = ns_parser.extract_tool_calls(text, _mock_request())
+
+        assert ns_result.tools_called
+        assert len(ns_result.tool_calls) == 2
+        assert ns_result.tool_calls[0].function.name == "a"
+        assert ns_result.tool_calls[1].function.name == "b"
+
+    def test_no_tools_equivalence(self):
+        text = "Just a regular response, no tools here."
+
+        ns_parser = GrammarToolParser(
+            _mock_tokenizer(),
+            grammar_config=_hermes_config(),
+        )
+        ns_result = ns_parser.extract_tool_calls(text, _mock_request())
+
+        assert not ns_result.tools_called
+        assert ns_result.content == text

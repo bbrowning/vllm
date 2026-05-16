@@ -46,10 +46,13 @@ class TokenIDScanner:
         self,
         token_id_to_terminal: dict[int, str],
         tokenizer,
+        drop_token_ids: set[int] | None = None,
     ) -> None:
         self.token_id_to_terminal = token_id_to_terminal
         self.tokenizer = tokenizer
         self._token_text_cache: dict[int, str] = {}
+        self._drop_token_ids = drop_token_ids or set()
+        self._deferred_terminals: list[PreLexedTerminal] = []
 
     def _decode_token(self, token_id: int) -> str:
         if token_id not in self._token_text_cache:
@@ -61,17 +64,29 @@ class TokenIDScanner:
         delta_text: str,
         delta_token_ids: Sequence[int],
     ) -> list[LexerInput]:
-        if not self.token_id_to_terminal:
-            return [TextChunk(delta_text)] if delta_text else []
+        prefix_items: list[LexerInput] = []
+        effective_text = delta_text
 
-        special_positions: list[tuple[int, int, str]] = []
-        for idx, tid in enumerate(delta_token_ids):
-            terminal = self.token_id_to_terminal.get(tid)
-            if terminal is not None:
-                special_positions.append((idx, tid, terminal))
+        if self._deferred_terminals:
+            prefix_items, effective_text = self._resolve_deferred(delta_text)
 
-        if not special_positions:
-            return [TextChunk(delta_text)] if delta_text else []
+        if not self.token_id_to_terminal and not self._drop_token_ids:
+            if effective_text:
+                prefix_items.append(TextChunk(effective_text))
+            return prefix_items
+
+        has_special = False
+        has_drop = False
+        for tid in delta_token_ids:
+            if tid in self.token_id_to_terminal:
+                has_special = True
+            if tid in self._drop_token_ids:
+                has_drop = True
+
+        if not has_special and not has_drop:
+            if effective_text:
+                prefix_items.append(TextChunk(effective_text))
+            return prefix_items
 
         token_texts = [self._decode_token(tid) for tid in delta_token_ids]
 
@@ -79,6 +94,8 @@ class TokenIDScanner:
         text_accum: list[str] = []
 
         for idx, tid in enumerate(delta_token_ids):
+            if tid in self._drop_token_ids:
+                continue
             terminal = self.token_id_to_terminal.get(tid)
             if terminal is not None:
                 if text_accum:
@@ -95,4 +112,141 @@ class TokenIDScanner:
             if joined:
                 results.append(TextChunk(joined))
 
+        if effective_text:
+            if has_drop:
+                clean_delta = effective_text
+                for idx, tid in enumerate(delta_token_ids):
+                    if tid in self._drop_token_ids:
+                        dropped = token_texts[idx]
+                        pos = clean_delta.find(dropped)
+                        if pos >= 0:
+                            clean_delta = (
+                                clean_delta[:pos] + clean_delta[pos + len(dropped) :]
+                            )
+                if clean_delta:
+                    if results:
+                        results = self._recover_holdback_text(clean_delta, results)
+                    else:
+                        results = [TextChunk(clean_delta)]
+            else:
+                results = self._recover_holdback_text(effective_text, results)
+        else:
+            # No detokenizer text to validate against — individually-decoded
+            # TextChunks are unreliable (context-dependent decoding).  Keep
+            # only PreLexedTerminals; the text will arrive in a later delta.
+            results = [r for r in results if isinstance(r, PreLexedTerminal)]
+
+        return prefix_items + results
+
+    def flush_pending(self) -> list[LexerInput]:
+        """Emit any deferred terminals at end-of-stream."""
+        if not self._deferred_terminals:
+            return []
+        results: list[LexerInput] = list(self._deferred_terminals)
+        self._deferred_terminals.clear()
         return results
+
+    def _resolve_deferred(
+        self,
+        delta_text: str,
+    ) -> tuple[list[LexerInput], str]:
+        """Resolve deferred terminals against new delta_text.
+
+        When a previous ``scan()`` deferred a terminal (its text hadn't
+        arrived yet), the next delta's text should contain that terminal's
+        text.  Split delta_text at the terminal boundary: text before
+        belongs to the previous parser state, the terminal triggers the
+        state transition, and text after belongs to the new state.
+
+        Returns ``(prefix_items, remaining_text)`` where prefix_items
+        are the resolved deferred terminals (with any preceding text)
+        and remaining_text is the unconsumed portion of delta_text that
+        should be scanned with the current delta's token IDs.
+        """
+        deferred = self._deferred_terminals
+        self._deferred_terminals = []
+
+        results: list[LexerInput] = []
+        remaining = delta_text
+
+        for terminal in deferred:
+            pos = remaining.find(terminal.text)
+            if pos > 0:
+                results.append(TextChunk(remaining[:pos]))
+                results.append(terminal)
+                remaining = remaining[pos + len(terminal.text) :]
+            elif pos == 0:
+                results.append(terminal)
+                remaining = remaining[len(terminal.text) :]
+            else:
+                results.append(terminal)
+
+        return results, remaining
+
+    def _recover_holdback_text(
+        self,
+        delta_text: str,
+        results: list[LexerInput],
+    ) -> list[LexerInput]:
+        """Recover detokenizer hold-back text not in delta_token_ids.
+
+        The detokenizer may flush previously held-back text in
+        ``delta_text`` that has no corresponding token ID in
+        ``delta_token_ids``.  This hold-back text always appears as a
+        prefix of ``delta_text``.
+        """
+        if not results:
+            return [TextChunk(delta_text)]
+
+        reconstructed_parts: list[str] = []
+        for item in results:
+            if isinstance(item, TextChunk):
+                reconstructed_parts.append(item.text)
+            elif isinstance(item, PreLexedTerminal):
+                if not isinstance(item.text, str):
+                    return results
+                reconstructed_parts.append(item.text)
+        reconstructed = "".join(reconstructed_parts)
+
+        if not reconstructed:
+            return [TextChunk(delta_text)] + results
+
+        pos = delta_text.find(reconstructed)
+        if pos > 0:
+            return [TextChunk(delta_text[:pos])] + results
+        if pos == 0:
+            return results
+
+        # Exact match failed (SentencePiece context-dependent decoding,
+        # or detokenizer held back the special-token text).  Rebuild
+        # from delta_text using PreLexedTerminals as split anchors.
+        # delta_text is the authoritative source for text content.
+        #
+        # When a terminal's text is NOT in delta_text (the detokenizer
+        # is still holding it back), defer the terminal to the next
+        # scan() call rather than emitting it now — this keeps the
+        # state machine in sync with the actual text stream.
+        new_results: list[LexerInput] = []
+        remaining = delta_text
+        for item in results:
+            if not isinstance(item, PreLexedTerminal):
+                continue
+            pos = remaining.find(item.text)
+            if pos > 0:
+                new_results.append(TextChunk(remaining[:pos]))
+                new_results.append(item)
+                remaining = remaining[pos + len(item.text) :]
+            elif pos == 0:
+                new_results.append(item)
+                remaining = remaining[len(item.text) :]
+            else:
+                # Terminal text not in delta_text — detokenizer hasn't
+                # flushed it yet.  Emit remaining text (belongs to the
+                # current parser state) and defer the terminal.
+                if remaining:
+                    new_results.append(TextChunk(remaining))
+                    remaining = ""
+                self._deferred_terminals.append(item)
+        if remaining:
+            new_results.append(TextChunk(remaining))
+        return new_results

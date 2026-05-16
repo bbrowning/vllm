@@ -56,14 +56,20 @@ class StreamingParserEngine:
         self.tool_index = -1
 
         resolved_token_ids: dict[int, str] = {}
-        if config.token_id_terminals and tokenizer is not None:
+        drop_token_ids: set[int] = set()
+        if tokenizer is not None:
             vocab = tokenizer.get_vocab()
-            for terminal_name, token_text in config.token_id_terminals.items():
+            if config.token_id_terminals:
+                for terminal_name, token_text in config.token_id_terminals.items():
+                    tid = vocab.get(token_text)
+                    if tid is not None:
+                        resolved_token_ids[tid] = terminal_name
+            for token_text in config.drop_tokens:
                 tid = vocab.get(token_text)
                 if tid is not None:
-                    resolved_token_ids[tid] = terminal_name
+                    drop_token_ids.add(tid)
 
-        self._scanner = TokenIDScanner(resolved_token_ids, tokenizer)
+        self._scanner = TokenIDScanner(resolved_token_ids, tokenizer, drop_token_ids)
 
         terminal_defs = terminals_from_literals(config.terminals)
         self._lexer = IncrementalLexer(terminal_defs, content_terminal="__CONTENT__")
@@ -80,10 +86,47 @@ class StreamingParserEngine:
     ) -> list[SemanticEvent]:
         """Feed one streaming delta and return produced events."""
         scanner_items = self._scanner.scan(delta_text, delta_token_ids)
-        events: list[SemanticEvent] = []
 
+        if len(scanner_items) == 1 and isinstance(scanner_items[0], TextChunk):
+            lex_tokens = self._lexer.feed(scanner_items[0].text)
+            if len(lex_tokens) == 1 and lex_tokens[0].terminal == "__CONTENT__":
+                text = lex_tokens[0].value
+                if self.state == ParserState.TOOL_ARGS:
+                    if self.config.tool_args_json:
+                        return self._feed_args_text(text)
+                    return [
+                        SemanticEvent(
+                            EventType.ARG_VALUE_CHUNK,
+                            value=text,
+                            tool_index=self.tool_index,
+                        )
+                    ]
+                content_type = self.config.content_events.get(self.state)
+                if content_type is not None:
+                    return [
+                        SemanticEvent(
+                            content_type,
+                            value=text,
+                            tool_index=self.tool_index,
+                        )
+                    ]
+                return []
+            events: list[SemanticEvent] = []
+            for tok in lex_tokens:
+                if tok.terminal == "__CONTENT__":
+                    events.extend(self._on_content(tok.value))
+                else:
+                    events.extend(self._on_terminal(tok.terminal, tok.value))
+            return events
+
+        events = []
         for item in scanner_items:
             if isinstance(item, PreLexedTerminal):
+                for tok in self._lexer.flush():
+                    if tok.terminal == "__CONTENT__":
+                        events.extend(self._on_content(tok.value))
+                    else:
+                        events.extend(self._on_terminal(tok.terminal, tok.value))
                 events.extend(self._on_terminal(item.terminal, item.text))
             elif isinstance(item, TextChunk):
                 lex_tokens = self._lexer.feed(item.text)
@@ -98,6 +141,22 @@ class StreamingParserEngine:
     def finish(self) -> list[SemanticEvent]:
         """Signal end-of-stream and flush any remaining buffered content."""
         events: list[SemanticEvent] = []
+
+        for item in self._scanner.flush_pending():
+            if isinstance(item, PreLexedTerminal):
+                for tok in self._lexer.flush():
+                    if tok.terminal == "__CONTENT__":
+                        events.extend(self._on_content(tok.value))
+                    else:
+                        events.extend(self._on_terminal(tok.terminal, tok.value))
+                events.extend(self._on_terminal(item.terminal, item.text))
+            elif isinstance(item, TextChunk):
+                lex_tokens = self._lexer.feed(item.text)
+                for tok in lex_tokens:
+                    if tok.terminal == "__CONTENT__":
+                        events.extend(self._on_content(tok.value))
+                    else:
+                        events.extend(self._on_terminal(tok.terminal, tok.value))
 
         remaining = self._lexer.flush()
         for tok in remaining:

@@ -686,16 +686,26 @@ class DelegatingParser(Parser):
                 current_token_ids=current_token_ids,
                 delta_token_ids=delta_token_ids,
             )
-            if self.is_reasoning_end_streaming(current_token_ids, delta_token_ids):
-                state.reasoning_ended = True
-                current_token_ids = self.extract_content_ids(delta_token_ids)
-                current_text = (
-                    delta_message.content
-                    if delta_message and delta_message.content
-                    else ""
+            # Hand off remaining content to tool parser
+            if self._tool_parser and self.is_reasoning_end_streaming(current_token_ids, delta_token_ids):
+                # Verify the reasoning parser actually processed the end.
+                # Grammar parsers may defer the end terminal when the
+                # detokenizer holds back text, causing a token-ID / text
+                # mismatch.  Only transition once the parser confirms.
+                processed = (
+                    self._reasoning_parser.has_reasoning_ended()
+                    if self._reasoning_parser
+                    else None
                 )
-                delta_text = current_text
-                delta_token_ids = current_token_ids
+                if processed is not False:
+                    state.reasoning_ended = True
+                    current_token_ids = self.extract_content_ids(delta_token_ids)
+                    if current_token_ids:
+                        current_text = self.model_tokenizer.decode(current_token_ids)
+                    else:
+                        current_text = ""
+                    if delta_message:
+                        delta_message.content = None
 
         # Tool call extraction
         if self._in_tool_call_phase(state):
@@ -706,9 +716,10 @@ class DelegatingParser(Parser):
                 delta_text = current_text
                 delta_token_ids = current_token_ids
 
-            # A boundary delta may carry both reasoning and tool call,
-            # save it before the tool parser overwrites delta_message.
-            reasoning = delta_message.reasoning if delta_message else None
+            reasoning_from_this_batch = (
+                delta_message.reasoning if delta_message else None
+            )
+
             delta_message, state.function_name_returned = (
                 self._extract_tool_calls_streaming(
                     previous_text=state.previous_text,
@@ -723,10 +734,12 @@ class DelegatingParser(Parser):
                     function_name_returned=state.function_name_returned,
                 )
             )
-            if reasoning:
-                if not delta_message:
-                    delta_message = DeltaMessage()
-                delta_message.reasoning = reasoning
+
+            if reasoning_from_this_batch:
+                if delta_message is None:
+                    delta_message = DeltaMessage(reasoning=reasoning_from_this_batch)
+                elif not delta_message.reasoning:
+                    delta_message.reasoning = reasoning_from_this_batch
 
             if (
                 delta_message

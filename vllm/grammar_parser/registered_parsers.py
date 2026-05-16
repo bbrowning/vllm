@@ -87,6 +87,11 @@ class GrammarGemma4ReasoningParser(GrammarReasoningParser):
         self._reasoning_text: str = ""
         self._prefix_stripped: bool = False
 
+    def _reset_streaming_state(self) -> None:
+        super()._reset_streaming_state()
+        self._reasoning_text = ""
+        self._prefix_stripped = False
+
     def adjust_request(
         self, request: ChatCompletionRequest | ResponsesRequest
     ) -> ChatCompletionRequest | ResponsesRequest:
@@ -113,16 +118,6 @@ class GrammarGemma4ReasoningParser(GrammarReasoningParser):
             if end_id is not None and tid == end_id:
                 return True
         return self._reasoning_ended
-
-    def extract_reasoning(
-        self,
-        model_output: str,
-        request: ChatCompletionRequest | ResponsesRequest,
-    ) -> tuple[str | None, str | None]:
-        reasoning, content = super().extract_reasoning(model_output, request)
-        if reasoning is not None and reasoning.startswith(_GEMMA4_THOUGHT_PREFIX):
-            reasoning = reasoning[len(_GEMMA4_THOUGHT_PREFIX) :]
-        return reasoning, content
 
     def extract_reasoning_streaming(
         self,

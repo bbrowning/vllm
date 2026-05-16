@@ -22,6 +22,7 @@ from vllm.grammar_parser.grammar_config import (
     ParserState,
     Transition,
 )
+from vllm.grammar_parser.grammars.gemma4_tokens import GEMMA4_DROP_TOKENS
 from vllm.tool_parsers.gemma4_tool_parser import (
     _parse_gemma4_args,
 )
@@ -84,4 +85,6 @@ def gemma4_config() -> GrammarConfig:
         },
         arg_converter=_gemma4_arg_converter,
         tool_args_json=False,
+        arg_structural_chars=frozenset(",:{}[]<"),
+        drop_tokens=GEMMA4_DROP_TOKENS - {"<|tool_call>", "<tool_call|>", '<|"|>'},
     )

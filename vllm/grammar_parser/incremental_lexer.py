@@ -66,9 +66,19 @@ class IncrementalLexer:
         self._max_literal_len = max(
             (len(lit) for lit, _ in self._literal_strings), default=0
         )
+        self._literal_first_chars = frozenset(
+            lit[0] for lit, _ in self._literal_strings if lit
+        )
+        self._has_only_literals = not self._regex_terminals
 
     def feed(self, text: str) -> list[LexToken]:
         """Feed a text chunk and return any fully-resolved tokens."""
+        if not self.buffer and self._has_only_literals and self._literal_first_chars:
+            for ch in text:
+                if ch in self._literal_first_chars:
+                    break
+            else:
+                return [LexToken(self.content_terminal, text)]
         self.buffer += text
         return self._drain()
 
@@ -84,6 +94,17 @@ class IncrementalLexer:
         tokens: list[LexToken] = []
 
         while self.buffer:
+            if self._has_only_literals and self._literal_first_chars:
+                has_potential = False
+                for ch in self.buffer:
+                    if ch in self._literal_first_chars:
+                        has_potential = True
+                        break
+                if not has_potential:
+                    tokens.append(LexToken(self.content_terminal, self.buffer))
+                    self.buffer = ""
+                    break
+
             best_match: tuple[str, str, int] | None = None  # (terminal, value, length)
 
             for lit, name in self._literal_strings:
@@ -133,13 +154,18 @@ class IncrementalLexer:
     def _find_content_boundary(self) -> int:
         """Find how many characters at the start of the buffer are safe
         to emit as content (i.e. cannot be the start of any terminal)."""
-        for i in range(1, len(self.buffer)):
-            suffix = self.buffer[i:]
+        buf = self.buffer
+        n = len(buf)
+        first_chars = self._literal_first_chars
+        for i in range(1, n):
+            if buf[i] not in first_chars:
+                continue
+            remaining = n - i
             for lit, _ in self._literal_strings:
-                check_len = min(len(suffix), len(lit))
-                if suffix[:check_len] == lit[:check_len]:
+                check_len = min(remaining, len(lit))
+                if buf[i : i + check_len] == lit[:check_len]:
                     return i
-        return len(self.buffer)
+        return n
 
 
 def terminals_from_literals(literals: dict[str, str]) -> list[TerminalDef]:
