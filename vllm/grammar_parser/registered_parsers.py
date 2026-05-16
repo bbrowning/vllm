@@ -15,6 +15,12 @@ from typing import TYPE_CHECKING
 
 from vllm.entrypoints.openai.engine.protocol import DeltaMessage
 from vllm.grammar_parser.adapter import GrammarReasoningParser, GrammarToolParser
+from vllm.grammar_parser.events import EventType
+from vllm.grammar_parser.grammar_config import (
+    GrammarConfig,
+    ParserState,
+    Transition,
+)
 from vllm.grammar_parser.grammars.gemma4 import gemma4_config
 from vllm.grammar_parser.grammars.gemma4_channel import gemma4_channel_config
 from vllm.grammar_parser.grammars.hermes import hermes_config
@@ -30,6 +36,145 @@ if TYPE_CHECKING:
     from vllm.tool_parsers.abstract_tool_parser import Tool
 
 _GEMMA4_THOUGHT_PREFIX = "thought\n"
+
+
+class GrammarQwen3CoderToolParser(GrammarToolParser):
+    def __init__(
+        self,
+        tokenizer: TokenizerLike,
+        tools: list[Tool] | None = None,
+    ) -> None:
+        super().__init__(tokenizer, tools, grammar_config=qwen3xml_config())
+
+
+def _qwen3_reasoning_config() -> GrammarConfig:
+    """Grammar config for Qwen3 reasoning.
+
+    Starts in REASONING state because Qwen3.5+ chat templates place
+    ``<think>`` in the prompt, so generated output begins mid-reasoning.
+    ``<think>`` in output (old templates) is consumed as a no-op.
+    """
+    return GrammarConfig(
+        name="qwen3_reasoning",
+        initial_state=ParserState.REASONING,
+        terminals={
+            "THINK_START": "<think>",
+            "THINK_END": "</think>",
+        },
+        token_id_terminals={
+            "THINK_START": "<think>",
+            "THINK_END": "</think>",
+        },
+        transitions={
+            (ParserState.REASONING, "THINK_START"): Transition(
+                ParserState.REASONING,
+                [],
+            ),
+            (ParserState.REASONING, "THINK_END"): Transition(
+                ParserState.CONTENT,
+                [EventType.REASONING_END],
+            ),
+        },
+        content_events={
+            ParserState.CONTENT: EventType.TEXT_CHUNK,
+            ParserState.REASONING: EventType.REASONING_CHUNK,
+        },
+    )
+
+
+class GrammarQwen3ReasoningParser(GrammarReasoningParser):
+    """Reasoning parser for Qwen3 ``<think>``/``</think>`` format.
+
+    Uses ``initial_state=REASONING`` so output without ``<think>``
+    (Qwen3.5+ style where ``<think>`` is in the prompt) is correctly
+    treated as reasoning. ``<think>`` in output (old template) is
+    consumed as a no-op transition.
+
+    Extends :class:`GrammarReasoningParser` with:
+    - ``<tool_call>`` as implicit reasoning end (token ID detection)
+    """
+
+    def __init__(self, tokenizer: TokenizerLike, **kwargs) -> None:
+        super().__init__(
+            tokenizer,
+            grammar_config=_qwen3_reasoning_config(),
+            **kwargs,
+        )
+        vocab = self.vocab
+        self._tool_call_token_id: int | None = vocab.get("<tool_call>")
+        self._tool_call_end_token_id: int | None = vocab.get("</tool_call>")
+
+    def is_reasoning_end(self, input_ids: Sequence[int]) -> bool:
+        if super().is_reasoning_end(input_ids):
+            return True
+        tool_call_id = self._tool_call_token_id
+        tool_call_end_id = self._tool_call_end_token_id
+        if tool_call_id is not None:
+            for i in range(len(input_ids) - 1, -1, -1):
+                if input_ids[i] == tool_call_id:
+                    if tool_call_end_id is not None and any(
+                        input_ids[j] == tool_call_end_id
+                        for j in range(i + 1, len(input_ids))
+                    ):
+                        continue
+                    return True
+        return False
+
+    def extract_reasoning_streaming(
+        self,
+        previous_text: str,
+        current_text: str,
+        delta_text: str,
+        previous_token_ids: Sequence[int],
+        current_token_ids: Sequence[int],
+        delta_token_ids: Sequence[int],
+    ) -> DeltaMessage | None:
+        tool_call_id = self._tool_call_token_id
+        if tool_call_id is not None and tool_call_id in delta_token_ids:
+            tool_tag = "<tool_call>"
+            tool_idx = delta_text.find(tool_tag)
+            if tool_idx >= 0:
+                reasoning_part = delta_text[:tool_idx]
+                content_part = delta_text[tool_idx:]
+                self._reasoning_ended = True
+                return DeltaMessage(
+                    reasoning=reasoning_part if reasoning_part else None,
+                    content=content_part if content_part else None,
+                )
+
+        end_id = self._reasoning_end_token_id
+        if end_id is not None and end_id in previous_token_ids:
+            if delta_text:
+                return DeltaMessage(content=delta_text)
+            return None
+        if tool_call_id is not None and tool_call_id in previous_token_ids:
+            if delta_text:
+                return DeltaMessage(content=delta_text)
+            return None
+
+        return super().extract_reasoning_streaming(
+            previous_text,
+            current_text,
+            delta_text,
+            previous_token_ids,
+            current_token_ids,
+            delta_token_ids,
+        )
+
+    def extract_reasoning(
+        self,
+        model_output: str,
+        request: ChatCompletionRequest | ResponsesRequest,
+    ) -> tuple[str | None, str | None]:
+        reasoning, content = super().extract_reasoning(model_output, request)
+
+        if reasoning is not None and content is None:
+            tool_idx = reasoning.find("<tool_call>")
+            if tool_idx != -1:
+                content = reasoning[tool_idx:]
+                reasoning = reasoning[:tool_idx] or None
+
+        return reasoning, content
 
 
 class GrammarGemma4ToolParser(GrammarToolParser):

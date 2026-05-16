@@ -205,6 +205,10 @@ _GRAMMAR_TOOL_PARSERS_TO_REGISTER = {
         "vllm.grammar_parser.registered_parsers",
         "GrammarHermesToolParser",
     ),
+    "qwen3_coder_grammar": (
+        "vllm.grammar_parser.registered_parsers",
+        "GrammarQwen3CoderToolParser",
+    ),
 }
 
 

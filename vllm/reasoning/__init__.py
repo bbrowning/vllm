@@ -131,6 +131,10 @@ _GRAMMAR_REASONING_PARSERS_TO_REGISTER = {
         "vllm.grammar_parser.registered_parsers",
         "GrammarGemma4ReasoningParser",
     ),
+    "qwen3_grammar": (
+        "vllm.grammar_parser.registered_parsers",
+        "GrammarQwen3ReasoningParser",
+    ),
 }
 
 
