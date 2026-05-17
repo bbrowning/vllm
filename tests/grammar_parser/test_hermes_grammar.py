@@ -3,16 +3,20 @@
 """Tests for the grammar-based Hermes JSON tool call parser."""
 
 import json
-from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
+from tests.grammar_parser.streaming_helpers import (
+    collect_function_name,
+    collect_tool_arguments,
+    simulate_tool_streaming,
+)
 from vllm.entrypoints.openai.chat_completion.protocol import (
     ChatCompletionRequest,
 )
-from vllm.grammar_parser.adapter import GrammarToolParser
 from vllm.grammar_parser.grammars.hermes import hermes_config
+from vllm.grammar_parser.unified_parser import GrammarParser
 
 
 @pytest.fixture
@@ -31,7 +35,7 @@ def mock_tokenizer():
 
 @pytest.fixture
 def parser(mock_tokenizer):
-    return GrammarToolParser(
+    return GrammarParser(
         mock_tokenizer,
         grammar_config=hermes_config(),
     )
@@ -125,55 +129,44 @@ class TestNonStreaming:
         args = json.loads(result.tool_calls[0].function.arguments)
         assert args == {}
 
+    def test_various_data_types(self, parser, mock_request):
+        text = (
+            '<tool_call>{"name": "multi_type", "arguments": '
+            '{"s": "hello", "i": 42, "f": 3.14, "b": true, '
+            '"n": null, "a": [1, "two"], '
+            '"o": {"nested": true}}}</tool_call>'
+        )
+        result = parser.extract_tool_calls(text, mock_request)
+
+        assert result.tools_called is True
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args == {
+            "s": "hello",
+            "i": 42,
+            "f": 3.14,
+            "b": True,
+            "n": None,
+            "a": [1, "two"],
+            "o": {"nested": True},
+        }
+
+    def test_escaped_strings(self, parser, mock_request):
+        text = (
+            '<tool_call>{"name": "write", "arguments": '
+            '{"path": "C:\\\\Users\\\\test\\\\file.txt", '
+            '"content": "line1\\nline2\\n", '
+            '"label": "say \\"hello\\""}}</tool_call>'
+        )
+        result = parser.extract_tool_calls(text, mock_request)
+
+        assert result.tools_called is True
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args["path"] == "C:\\Users\\test\\file.txt"
+        assert args["content"] == "line1\nline2\n"
+        assert args["label"] == 'say "hello"'
+
 
 class TestStreaming:
-    def _simulate_streaming(
-        self,
-        parser: GrammarToolParser,
-        mock_request,
-        chunks: list[str],
-    ) -> list[tuple[Any, str]]:
-        results: list[tuple[Any, str]] = []
-        previous_text = ""
-        previous_token_ids: list[int] = []
-
-        for chunk in chunks:
-            current_text = previous_text + chunk
-            delta_token_ids: list[int] = [0]
-            current_token_ids = previous_token_ids + delta_token_ids
-
-            delta = parser.extract_tool_calls_streaming(
-                previous_text=previous_text,
-                current_text=current_text,
-                delta_text=chunk,
-                previous_token_ids=tuple(previous_token_ids),
-                current_token_ids=tuple(current_token_ids),
-                delta_token_ids=tuple(delta_token_ids),
-                request=mock_request,
-            )
-            results.append((delta, current_text))
-            previous_text = current_text
-            previous_token_ids = list(current_token_ids)
-
-        return results
-
-    def _collect_arguments(self, results):
-        args_text = ""
-        for delta, _ in results:
-            if delta and delta.tool_calls:
-                for tc in delta.tool_calls:
-                    if tc.function and tc.function.arguments:
-                        args_text += tc.function.arguments
-        return args_text
-
-    def _collect_function_name(self, results):
-        for delta, _ in results:
-            if delta and delta.tool_calls:
-                for tc in delta.tool_calls:
-                    if tc.function and tc.function.name:
-                        return tc.function.name
-        return None
-
     def test_basic_streaming(self, parser, mock_request):
         chunks = [
             "<tool_call>",
@@ -184,12 +177,12 @@ class TestStreaming:
             "</tool_call>",
         ]
 
-        results = self._simulate_streaming(parser, mock_request, chunks)
+        results = simulate_tool_streaming(parser, mock_request, chunks)
 
-        name = self._collect_function_name(results)
+        name = collect_function_name(results)
         assert name == "get_weather"
 
-        args_text = self._collect_arguments(results)
+        args_text = collect_tool_arguments(results)
         assert args_text
         parsed = json.loads(args_text)
         assert parsed == {"city": "Tokyo"}
@@ -203,7 +196,7 @@ class TestStreaming:
             "</tool_call>",
         ]
 
-        results = self._simulate_streaming(parser, mock_request, chunks)
+        results = simulate_tool_streaming(parser, mock_request, chunks)
 
         content_parts = []
         for delta, _ in results:
@@ -212,7 +205,7 @@ class TestStreaming:
 
         assert "".join(content_parts).strip().startswith("Let me check")
 
-        name = self._collect_function_name(results)
+        name = collect_function_name(results)
         assert name == "search"
 
     def test_streaming_multiple_calls(self, parser, mock_request):
@@ -225,7 +218,7 @@ class TestStreaming:
             "</tool_call>",
         ]
 
-        results = self._simulate_streaming(parser, mock_request, chunks)
+        results = simulate_tool_streaming(parser, mock_request, chunks)
 
         names = []
         for delta, _ in results:
@@ -248,12 +241,12 @@ class TestStreaming:
             "</tool_call>",
         ]
 
-        results = self._simulate_streaming(parser, mock_request, chunks)
+        results = simulate_tool_streaming(parser, mock_request, chunks)
 
-        name = self._collect_function_name(results)
+        name = collect_function_name(results)
         assert name == "func"
 
-        args_text = self._collect_arguments(results)
+        args_text = collect_tool_arguments(results)
         assert args_text
         parsed = json.loads(args_text)
         assert parsed == {"key": "value"}

@@ -29,11 +29,7 @@ from vllm.entrypoints.openai.chat_completion.protocol import (
     ChatCompletionRequest,
 )
 from vllm.entrypoints.openai.engine.protocol import DeltaMessage
-from vllm.grammar_parser.registered_parsers import (
-    GrammarGemma4ReasoningParser,
-    GrammarGemma4ToolParser,
-)
-from vllm.parser.abstract_parser import _WrappedParser
+from vllm.grammar_parser.unified_parsers import Gemma4GrammarParser
 
 # ── Special token IDs (arbitrary but consistent) ─────────────────────
 CHANNEL_START_ID = 50  # <|channel>
@@ -207,9 +203,7 @@ def mock_tokenizer():
 
 @pytest.fixture
 def parser(mock_tokenizer):
-    _WrappedParser.reasoning_parser_cls = GrammarGemma4ReasoningParser
-    _WrappedParser.tool_parser_cls = GrammarGemma4ToolParser
-    return _WrappedParser(mock_tokenizer)
+    return Gemma4GrammarParser(mock_tokenizer)
 
 
 @pytest.fixture
@@ -482,9 +476,7 @@ class TestGemma4ReasoningTruncationWithHoldback:
 
     @pytest.fixture
     def parser_2(self, tokenizer_2):
-        _WrappedParser.reasoning_parser_cls = GrammarGemma4ReasoningParser
-        _WrappedParser.tool_parser_cls = GrammarGemma4ToolParser
-        return _WrappedParser(tokenizer_2)
+        return Gemma4GrammarParser(tokenizer_2)
 
     def test_reasoning_not_truncated(self, parser_2, tokenizer_2, request_obj):
         """Reasoning must include the full text up to <channel|>."""

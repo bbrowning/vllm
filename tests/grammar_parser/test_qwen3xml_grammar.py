@@ -7,20 +7,25 @@ that the grammar-driven parser produces identical results.
 """
 
 import json
-from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
+from tests.grammar_parser.streaming_helpers import (
+    collect_function_name,
+    collect_tool_arguments,
+    simulate_tool_streaming,
+    simulate_tool_streaming_with_ids,
+)
 from vllm.entrypoints.openai.chat_completion.protocol import (
     ChatCompletionRequest,
 )
-from vllm.grammar_parser.adapter import GrammarToolParser
 from vllm.grammar_parser.grammars.qwen3xml import (
     TOOL_CALL_END,
     TOOL_CALL_START,
     qwen3xml_config,
 )
+from vllm.grammar_parser.unified_parser import GrammarParser
 
 
 @pytest.fixture
@@ -39,7 +44,7 @@ def mock_tokenizer():
 
 @pytest.fixture
 def parser(mock_tokenizer):
-    return GrammarToolParser(
+    return GrammarParser(
         mock_tokenizer,
         grammar_config=qwen3xml_config(),
     )
@@ -244,53 +249,6 @@ class TestNonStreaming:
 
 
 class TestStreaming:
-    def _simulate_streaming(
-        self,
-        parser: GrammarToolParser,
-        mock_request,
-        chunks: list[str],
-    ) -> list[tuple[Any, str]]:
-        results: list[tuple[Any, str]] = []
-        previous_text = ""
-        previous_token_ids: list[int] = []
-
-        for chunk in chunks:
-            current_text = previous_text + chunk
-            delta_token_ids: list[int] = [0]
-            current_token_ids = previous_token_ids + delta_token_ids
-
-            delta = parser.extract_tool_calls_streaming(
-                previous_text=previous_text,
-                current_text=current_text,
-                delta_text=chunk,
-                previous_token_ids=tuple(previous_token_ids),
-                current_token_ids=tuple(current_token_ids),
-                delta_token_ids=tuple(delta_token_ids),
-                request=mock_request,
-            )
-            results.append((delta, current_text))
-            previous_text = current_text
-            previous_token_ids = list(current_token_ids)
-
-        return results
-
-    def _collect_arguments(self, results):
-        args_text = ""
-        for delta, _ in results:
-            if delta and delta.tool_calls:
-                for tc in delta.tool_calls:
-                    if tc.function and tc.function.arguments:
-                        args_text += tc.function.arguments
-        return args_text
-
-    def _collect_function_name(self, results):
-        for delta, _ in results:
-            if delta and delta.tool_calls:
-                for tc in delta.tool_calls:
-                    if tc.function and tc.function.name:
-                        return tc.function.name
-        return None
-
     def test_basic_streaming(self, parser, mock_request):
         chunks = [
             "<tool_call>\n",
@@ -301,12 +259,12 @@ class TestStreaming:
             "</tool_call>",
         ]
 
-        results = self._simulate_streaming(parser, mock_request, chunks)
+        results = simulate_tool_streaming(parser, mock_request, chunks)
 
-        name = self._collect_function_name(results)
+        name = collect_function_name(results)
         assert name == "get_weather"
 
-        args_text = self._collect_arguments(results)
+        args_text = collect_tool_arguments(results)
         assert args_text
         parsed = json.loads(args_text)
         assert parsed == {"city": "Tokyo"}
@@ -321,12 +279,12 @@ class TestStreaming:
             "</tool_call>",
         ]
 
-        results = self._simulate_streaming(parser, mock_request, chunks)
+        results = simulate_tool_streaming(parser, mock_request, chunks)
 
-        name = self._collect_function_name(results)
+        name = collect_function_name(results)
         assert name == "get_weather"
 
-        args_text = self._collect_arguments(results)
+        args_text = collect_tool_arguments(results)
         assert args_text
         parsed = json.loads(args_text)
         assert parsed == {"city": "Tokyo", "unit": "celsius"}
@@ -342,7 +300,7 @@ class TestStreaming:
             "</tool_call>",
         ]
 
-        results = self._simulate_streaming(parser, mock_request, chunks)
+        results = simulate_tool_streaming(parser, mock_request, chunks)
 
         content_parts = []
         for delta, _ in results:
@@ -359,9 +317,9 @@ class TestStreaming:
             "</tool_call>",
         ]
 
-        results = self._simulate_streaming(parser, mock_request, chunks)
+        results = simulate_tool_streaming(parser, mock_request, chunks)
 
-        name = self._collect_function_name(results)
+        name = collect_function_name(results)
         assert name == "refresh"
 
     def test_streaming_split_parameter_tag(self, parser, mock_request):
@@ -376,12 +334,12 @@ class TestStreaming:
             "</tool_call>",
         ]
 
-        results = self._simulate_streaming(parser, mock_request, chunks)
+        results = simulate_tool_streaming(parser, mock_request, chunks)
 
-        name = self._collect_function_name(results)
+        name = collect_function_name(results)
         assert name == "test"
 
-        args_text = self._collect_arguments(results)
+        args_text = collect_tool_arguments(results)
         assert args_text
         parsed = json.loads(args_text)
         assert parsed["name"] == "Alice"
@@ -396,8 +354,8 @@ class TestStreaming:
             "</tool_call>",
         ]
 
-        results = self._simulate_streaming(parser, mock_request, chunks)
-        args_text = self._collect_arguments(results)
+        results = simulate_tool_streaming(parser, mock_request, chunks)
+        args_text = collect_tool_arguments(results)
         if args_text:
             parsed = json.loads(args_text)
             assert parsed["count"] == 42
@@ -417,7 +375,7 @@ class TestStreaming:
             "</tool_call>",
         ]
 
-        results = self._simulate_streaming(parser, mock_request, chunks)
+        results = simulate_tool_streaming(parser, mock_request, chunks)
 
         names = []
         for delta, _ in results:
@@ -441,9 +399,9 @@ class TestStreaming:
             "</tool_call>",
         ]
 
-        results = self._simulate_streaming(parser, mock_request, chunks)
+        results = simulate_tool_streaming(parser, mock_request, chunks)
 
-        args_text = self._collect_arguments(results)
+        args_text = collect_tool_arguments(results)
         assert args_text
         parsed = json.loads(args_text)
         assert parsed["query"] == "hello world test"
@@ -462,12 +420,12 @@ class TestStreaming:
             "</function>\n",
             "</tool_call>",
         ]
-        results = self._simulate_streaming(parser, mock_request, chunks)
+        results = simulate_tool_streaming(parser, mock_request, chunks)
 
-        name = self._collect_function_name(results)
+        name = collect_function_name(results)
         assert name == "Bash"
 
-        args_text = self._collect_arguments(results)
+        args_text = collect_tool_arguments(results)
         assert args_text
         parsed = json.loads(args_text)
         assert "ls -la /tmp" in parsed["command"]
@@ -494,7 +452,7 @@ class TestStreaming:
             "</function>\n",
             "</tool_call>",
         ]
-        results = self._simulate_streaming(parser, mock_request, chunks)
+        results = simulate_tool_streaming(parser, mock_request, chunks)
 
         names = []
         for delta, _ in results:
@@ -530,76 +488,26 @@ class TestStreamingWithSpecialTokenIDs:
 
     @pytest.fixture
     def parser(self, special_tokenizer):
-        return GrammarToolParser(
+        return GrammarParser(
             special_tokenizer,
             grammar_config=qwen3xml_config(),
         )
-
-    def _simulate_streaming_with_token_ids(
-        self,
-        parser: GrammarToolParser,
-        mock_request,
-        deltas: list[tuple[str, list[int]]],
-    ) -> list[tuple[Any, str]]:
-        """Each delta is (delta_text, delta_token_ids)."""
-        results: list[tuple[Any, str]] = []
-        previous_text = ""
-        previous_token_ids: list[int] = []
-
-        for delta_text, delta_tids in deltas:
-            current_text = previous_text + delta_text
-            current_token_ids = previous_token_ids + delta_tids
-
-            delta = parser.extract_tool_calls_streaming(
-                previous_text=previous_text,
-                current_text=current_text,
-                delta_text=delta_text,
-                previous_token_ids=tuple(previous_token_ids),
-                current_token_ids=tuple(current_token_ids),
-                delta_token_ids=tuple(delta_tids),
-                request=mock_request,
-            )
-            results.append((delta, current_text))
-            previous_text = current_text
-            previous_token_ids = list(current_token_ids)
-
-        return results
-
-    def _collect_arguments(self, results):
-        args_text = ""
-        for delta, _ in results:
-            if delta and delta.tool_calls:
-                for tc in delta.tool_calls:
-                    if tc.function and tc.function.arguments:
-                        args_text += tc.function.arguments
-        return args_text
-
-    def _collect_function_name(self, results):
-        for delta, _ in results:
-            if delta and delta.tool_calls:
-                for tc in delta.tool_calls:
-                    if tc.function and tc.function.name:
-                        return tc.function.name
-        return None
 
     def test_deferred_tool_call_with_function_in_same_delta(self, parser, mock_request):
         """<tool_call> token ID present but text stripped — function tag
         in the same delta must be parsed correctly after deferral."""
         deltas = [
-            # Delta 1: <tool_call> token ID (100) but text stripped,
-            # plus function tag text in same delta
             ("\n<function=get_weather>\n", [100, 1, 2, 3, 4]),
             ("<parameter=city>Tokyo</parameter>\n", [5, 6, 7, 8]),
             ("</function>\n", [9, 10]),
-            # </tool_call> token ID (101) stripped
             ("", [101]),
         ]
-        results = self._simulate_streaming_with_token_ids(parser, mock_request, deltas)
+        results = simulate_tool_streaming_with_ids(parser, mock_request, deltas)
 
-        name = self._collect_function_name(results)
+        name = collect_function_name(results)
         assert name == "get_weather"
 
-        args_text = self._collect_arguments(results)
+        args_text = collect_tool_arguments(results)
         assert args_text
         parsed = json.loads(args_text)
         assert parsed == {"city": "Tokyo"}
@@ -607,7 +515,6 @@ class TestStreamingWithSpecialTokenIDs:
     def test_deferred_tool_call_multiline_params(self, parser, mock_request):
         """<tool_call> stripped + multi-line params — full bug scenario."""
         deltas = [
-            # <tool_call> token (100) stripped, function + first param
             (
                 "\n<function=Bash>\n<parameter=command>\n",
                 [100, 1, 2, 3, 4, 5],
@@ -621,14 +528,14 @@ class TestStreamingWithSpecialTokenIDs:
                 [11, 12, 13, 14, 15],
             ),
             ("</function>\n", [16, 17]),
-            ("", [101]),  # </tool_call> stripped
+            ("", [101]),
         ]
-        results = self._simulate_streaming_with_token_ids(parser, mock_request, deltas)
+        results = simulate_tool_streaming_with_ids(parser, mock_request, deltas)
 
-        name = self._collect_function_name(results)
+        name = collect_function_name(results)
         assert name == "Bash"
 
-        args_text = self._collect_arguments(results)
+        args_text = collect_tool_arguments(results)
         assert args_text
         parsed = json.loads(args_text)
         assert "find /workspace" in parsed["command"]
@@ -637,31 +544,23 @@ class TestStreamingWithSpecialTokenIDs:
     def test_deferred_tool_call_only_whitespace(self, parser, mock_request):
         """<tool_call> stripped with only whitespace in same delta."""
         deltas = [
-            ("\n", [100, 1]),  # <tool_call> stripped, just newline
+            ("\n", [100, 1]),
             ("<function=refresh>\n", [2, 3, 4]),
             ("</function>\n", [5, 6]),
             ("", [101]),
         ]
-        results = self._simulate_streaming_with_token_ids(parser, mock_request, deltas)
+        results = simulate_tool_streaming_with_ids(parser, mock_request, deltas)
 
-        name = self._collect_function_name(results)
+        name = collect_function_name(results)
         assert name == "refresh"
 
     def test_holdback_with_stripped_tool_end_two_calls(self, parser, mock_request):
         """Two parallel tool calls where </tool_call> is stripped and
-        detokenizer hold-back text arrives in the same delta.
-
-        Reproduces the bug where the second tool call's parameters are
-        silently dropped because </tool_call> fires before </function>
-        is lexed."""
+        detokenizer hold-back text arrives in the same delta."""
         deltas = [
-            # First tool call: <tool_call> stripped
             ("\n<function=Bash>\n", [100, 1, 2, 3]),
             ("<parameter=command>\necho hi\n</parameter>\n", [4, 5, 6, 7]),
-            # </function> text arrives, then </tool_call> stripped with
-            # hold-back "\n" flushed in the same delta
             ("</function>\n", [8, 9, 101, 10]),
-            # Second tool call: <tool_call> stripped
             ("\n<function=Read>\n", [100, 11, 12, 13]),
             (
                 "<parameter=file_path>\n/workspace/main.py\n</parameter>\n",
@@ -670,7 +569,7 @@ class TestStreamingWithSpecialTokenIDs:
             ("</function>\n", [18, 19]),
             ("", [101]),
         ]
-        results = self._simulate_streaming_with_token_ids(parser, mock_request, deltas)
+        results = simulate_tool_streaming_with_ids(parser, mock_request, deltas)
 
         names = []
         for delta, _ in results:
@@ -686,12 +585,9 @@ class TestStreamingWithSpecialTokenIDs:
         """</tool_call> and <tool_call> both stripped in a single delta
         with hold-back text — worst case for parallel tool calls."""
         deltas = [
-            # First tool call
             ("\n<function=Bash>\n", [100, 1, 2, 3]),
             ("<parameter=cmd>\nls\n</parameter>\n</function>", [4, 5, 6, 7]),
-            # Both </tool_call> and <tool_call> stripped, newlines flushed
             ("\n\n", [101, 8, 100, 9]),
-            # Second tool call continues
             ("<function=Read>\n", [10, 11, 12]),
             (
                 "<parameter=file_path>\n/tmp/f.py\n</parameter>\n",
@@ -700,7 +596,7 @@ class TestStreamingWithSpecialTokenIDs:
             ("</function>\n", [17, 18]),
             ("", [101]),
         ]
-        results = self._simulate_streaming_with_token_ids(parser, mock_request, deltas)
+        results = simulate_tool_streaming_with_ids(parser, mock_request, deltas)
 
         names = []
         for delta, _ in results:

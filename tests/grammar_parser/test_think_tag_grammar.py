@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from vllm.grammar_parser.adapter import GrammarReasoningParser
+from tests.grammar_parser.streaming_helpers import simulate_reasoning_streaming
 from vllm.grammar_parser.events import EventType
 from vllm.grammar_parser.grammars.think_tag import think_tag_config
 from vllm.grammar_parser.parser_engine import StreamingParserEngine
@@ -20,6 +20,7 @@ from vllm.grammar_parser.token_id_scanner import (
     TextChunk,
     TokenIDScanner,
 )
+from vllm.grammar_parser.unified_parser import GrammarParser
 
 # Token IDs used in tests
 _START_ID = 50
@@ -65,36 +66,6 @@ def _make_tokenizer_with_text_map(
     return tokenizer
 
 
-def _stream_and_collect(
-    parser: GrammarReasoningParser,
-    chunks: list[str],
-) -> tuple[str, str]:
-    """Feed chunks through streaming and collect reasoning/content."""
-    reasoning_parts: list[str] = []
-    content_parts: list[str] = []
-    prev_text = ""
-    prev_ids: list[int] = []
-    for chunk in chunks:
-        cur_text = prev_text + chunk
-        cur_ids = prev_ids + [0]
-        delta = parser.extract_reasoning_streaming(
-            previous_text=prev_text,
-            current_text=cur_text,
-            delta_text=chunk,
-            previous_token_ids=tuple(prev_ids),
-            current_token_ids=tuple(cur_ids),
-            delta_token_ids=(0,),
-        )
-        if delta:
-            if delta.reasoning:
-                reasoning_parts.append(delta.reasoning)
-            if delta.content:
-                content_parts.append(delta.content)
-        prev_text = cur_text
-        prev_ids = cur_ids
-    return "".join(reasoning_parts), "".join(content_parts)
-
-
 class TestDefaultThinkTags:
     """Tests with default <think>/</think> tags (DeepSeekR1, Qwen3, etc.)."""
 
@@ -102,7 +73,7 @@ class TestDefaultThinkTags:
     def parser(self):
         config = think_tag_config()
         tokenizer = _make_tokenizer("<think>", "</think>")
-        return GrammarReasoningParser(tokenizer, grammar_config=config)
+        return GrammarParser(tokenizer, grammar_config=config)
 
     def test_reasoning_then_content(self, parser):
         text = "<think>Let me analyze this.</think>The answer is 42."
@@ -149,7 +120,7 @@ class TestDefaultThinkTags:
         assert result == [30, 40]
 
     def test_streaming_reasoning_then_content(self, parser):
-        reasoning, content = _stream_and_collect(
+        reasoning, content = simulate_reasoning_streaming(
             parser, ["<think>", "thinking", " hard", "</think>", "done"]
         )
         assert reasoning == "thinking hard"
@@ -167,7 +138,7 @@ class TestSeedOSSTags:
             name="seedoss",
         )
         tokenizer = _make_tokenizer("<seed:think>", "</seed:think>")
-        return GrammarReasoningParser(tokenizer, grammar_config=config)
+        return GrammarParser(tokenizer, grammar_config=config)
 
     def test_reasoning_extraction(self, parser):
         text = "<seed:think>analyzing...</seed:think>Result: yes."
@@ -176,7 +147,7 @@ class TestSeedOSSTags:
         assert content == "Result: yes."
 
     def test_streaming(self, parser):
-        reasoning, content = _stream_and_collect(
+        reasoning, content = simulate_reasoning_streaming(
             parser, ["<seed:think>", "step 1", "</seed:think>", "answer"]
         )
         assert reasoning == "step 1"
@@ -194,7 +165,7 @@ class TestMistralTags:
             name="mistral",
         )
         tokenizer = _make_tokenizer("[THINK]", "[/THINK]")
-        return GrammarReasoningParser(tokenizer, grammar_config=config)
+        return GrammarParser(tokenizer, grammar_config=config)
 
     def test_reasoning_extraction(self, parser):
         text = "[THINK]Let me reason.[/THINK]The answer."
@@ -203,7 +174,7 @@ class TestMistralTags:
         assert content == "The answer."
 
     def test_streaming(self, parser):
-        reasoning, content = _stream_and_collect(
+        reasoning, content = simulate_reasoning_streaming(
             parser, ["[THINK]", "reasoning", "[/THINK]", "content"]
         )
         assert reasoning == "reasoning"
@@ -217,7 +188,7 @@ class TestEmptyReasoning:
     def parser(self):
         config = think_tag_config()
         tokenizer = _make_tokenizer("<think>", "</think>")
-        return GrammarReasoningParser(tokenizer, grammar_config=config)
+        return GrammarParser(tokenizer, grammar_config=config)
 
     def test_empty_think_block(self, parser):
         text = "<think></think>The answer."
@@ -309,7 +280,7 @@ class TestDetokenizerHoldback:
         }
         tokenizer = _make_tokenizer_with_text_map(start_tag, end_tag, token_map)
         config = think_tag_config(start_tag=start_tag, end_tag=end_tag)
-        parser = GrammarReasoningParser(tokenizer, grammar_config=config)
+        parser = GrammarParser(tokenizer, grammar_config=config)
 
         reasoning_parts: list[str] = []
         content_parts: list[str] = []

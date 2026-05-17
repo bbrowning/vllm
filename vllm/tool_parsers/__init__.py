@@ -192,31 +192,10 @@ _TOOL_PARSERS_TO_REGISTER = {
     ),
 }
 
-_GRAMMAR_TOOL_PARSERS_TO_REGISTER = {
-    "gemma4_grammar": (
-        "vllm.grammar_parser.registered_parsers",
-        "GrammarGemma4ToolParser",
-    ),
-    "qwen3_xml_grammar": (
-        "vllm.grammar_parser.registered_parsers",
-        "GrammarQwen3XMLToolParser",
-    ),
-    "hermes_grammar": (
-        "vllm.grammar_parser.registered_parsers",
-        "GrammarHermesToolParser",
-    ),
-    "qwen3_coder_grammar": (
-        "vllm.grammar_parser.registered_parsers",
-        "GrammarQwen3CoderToolParser",
-    ),
-}
-
 
 def register_lazy_tool_parsers():
     for name, (file_name, class_name) in _TOOL_PARSERS_TO_REGISTER.items():
         module_path = f"vllm.tool_parsers.{file_name}"
-        ToolParserManager.register_lazy_module(name, module_path, class_name)
-    for name, (module_path, class_name) in _GRAMMAR_TOOL_PARSERS_TO_REGISTER.items():
         ToolParserManager.register_lazy_module(name, module_path, class_name)
 
 

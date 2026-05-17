@@ -122,35 +122,11 @@ _REASONING_PARSERS_TO_REGISTER = {
     ),
 }
 
-_GRAMMAR_REASONING_PARSERS_TO_REGISTER = {
-    "think_tag_grammar": (
-        "vllm.grammar_parser.registered_parsers",
-        "GrammarThinkTagReasoningParser",
-    ),
-    "gemma4_grammar": (
-        "vllm.grammar_parser.registered_parsers",
-        "GrammarGemma4ReasoningParser",
-    ),
-    "qwen3_grammar": (
-        "vllm.grammar_parser.registered_parsers",
-        "GrammarQwen3ReasoningParser",
-    ),
-}
-
 
 def register_lazy_reasoning_parsers():
     for name, (file_name, class_name) in _REASONING_PARSERS_TO_REGISTER.items():
         module_path = f"vllm.reasoning.{file_name}"
         ReasoningParserManager.register_lazy_module(name, module_path, class_name)
-    for name, (
-        module_path,
-        class_name,
-    ) in _GRAMMAR_REASONING_PARSERS_TO_REGISTER.items():
-        ReasoningParserManager.register_lazy_module(
-            name,
-            module_path,
-            class_name,
-        )
 
 
 register_lazy_reasoning_parsers()

@@ -7,20 +7,24 @@ that the grammar-driven parser produces identical results.
 """
 
 import json
-from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
+from tests.grammar_parser.streaming_helpers import (
+    collect_function_name,
+    collect_tool_arguments,
+    simulate_tool_streaming,
+)
 from vllm.entrypoints.openai.chat_completion.protocol import (
     ChatCompletionRequest,
 )
-from vllm.grammar_parser.adapter import GrammarToolParser
 from vllm.grammar_parser.grammars.gemma4 import (
     TOOL_CALL_END,
     TOOL_CALL_START,
     gemma4_config,
 )
+from vllm.grammar_parser.unified_parser import GrammarParser
 
 
 @pytest.fixture
@@ -36,7 +40,7 @@ def mock_tokenizer():
 
 @pytest.fixture
 def parser(mock_tokenizer):
-    return GrammarToolParser(
+    return GrammarParser(
         mock_tokenizer,
         grammar_config=gemma4_config(),
     )
@@ -164,54 +168,6 @@ class TestNonStreaming:
 
 
 class TestStreaming:
-    def _simulate_streaming(
-        self,
-        parser: GrammarToolParser,
-        mock_request,
-        chunks: list[str],
-    ) -> list[tuple[Any, str]]:
-        results: list[tuple[Any, str]] = []
-        previous_text = ""
-        previous_token_ids: list[int] = []
-
-        for chunk in chunks:
-            current_text = previous_text + chunk
-            delta_token_ids: list[int] = [0]
-
-            current_token_ids = previous_token_ids + delta_token_ids
-
-            delta = parser.extract_tool_calls_streaming(
-                previous_text=previous_text,
-                current_text=current_text,
-                delta_text=chunk,
-                previous_token_ids=tuple(previous_token_ids),
-                current_token_ids=tuple(current_token_ids),
-                delta_token_ids=tuple(delta_token_ids),
-                request=mock_request,
-            )
-            results.append((delta, current_text))
-            previous_text = current_text
-            previous_token_ids = list(current_token_ids)
-
-        return results
-
-    def _collect_arguments(self, results):
-        args_text = ""
-        for delta, _ in results:
-            if delta and delta.tool_calls:
-                for tc in delta.tool_calls:
-                    if tc.function and tc.function.arguments:
-                        args_text += tc.function.arguments
-        return args_text
-
-    def _collect_function_name(self, results):
-        for delta, _ in results:
-            if delta and delta.tool_calls:
-                for tc in delta.tool_calls:
-                    if tc.function and tc.function.name:
-                        return tc.function.name
-        return None
-
     def test_basic_streaming(self, parser, mock_request):
         chunks = [
             "<|tool_call>",
@@ -222,12 +178,12 @@ class TestStreaming:
             "<tool_call|>",
         ]
 
-        results = self._simulate_streaming(parser, mock_request, chunks)
+        results = simulate_tool_streaming(parser, mock_request, chunks)
 
-        name = self._collect_function_name(results)
+        name = collect_function_name(results)
         assert name == "get_weather"
 
-        args_text = self._collect_arguments(results)
+        args_text = collect_tool_arguments(results)
         assert args_text
         parsed = json.loads(args_text)
         assert parsed == {"location": "Paris, France"}
@@ -241,12 +197,12 @@ class TestStreaming:
             "<tool_call|>",
         ]
 
-        results = self._simulate_streaming(parser, mock_request, chunks)
+        results = simulate_tool_streaming(parser, mock_request, chunks)
 
-        name = self._collect_function_name(results)
+        name = collect_function_name(results)
         assert name == "get_weather"
 
-        args_text = self._collect_arguments(results)
+        args_text = collect_tool_arguments(results)
         assert args_text
         parsed = json.loads(args_text)
         assert parsed == {"location": "Tokyo", "unit": "celsius"}
@@ -259,8 +215,8 @@ class TestStreaming:
             "<tool_call|>",
         ]
 
-        results = self._simulate_streaming(parser, mock_request, chunks)
-        args_text = self._collect_arguments(results)
+        results = simulate_tool_streaming(parser, mock_request, chunks)
+        args_text = collect_tool_arguments(results)
         assert args_text
 
         parsed = json.loads(args_text)
@@ -277,7 +233,7 @@ class TestStreaming:
             "<tool_call|>",
         ]
 
-        results = self._simulate_streaming(parser, mock_request, chunks)
+        results = simulate_tool_streaming(parser, mock_request, chunks)
 
         content_parts = []
         for delta, _ in results:
@@ -295,8 +251,8 @@ class TestStreaming:
             "<tool_call|>",
         ]
 
-        results = self._simulate_streaming(parser, mock_request, chunks)
-        args_text = self._collect_arguments(results)
+        results = simulate_tool_streaming(parser, mock_request, chunks)
+        args_text = collect_tool_arguments(results)
         if args_text:
             parsed = json.loads(args_text)
             assert parsed["count"] == 42
@@ -309,8 +265,8 @@ class TestStreaming:
             "<tool_call|>",
         ]
 
-        results = self._simulate_streaming(parser, mock_request, chunks)
-        name = self._collect_function_name(results)
+        results = simulate_tool_streaming(parser, mock_request, chunks)
+        name = collect_function_name(results)
         assert name == "get_status"
 
     def test_streaming_split_delimiter(self, parser, mock_request):
@@ -323,8 +279,8 @@ class TestStreaming:
             "<tool_call|>",
         ]
 
-        results = self._simulate_streaming(parser, mock_request, chunks)
-        args_text = self._collect_arguments(results)
+        results = simulate_tool_streaming(parser, mock_request, chunks)
+        args_text = collect_tool_arguments(results)
         assert args_text
         parsed = json.loads(args_text)
         assert parsed["content"] == "Buy milk"
@@ -338,8 +294,8 @@ class TestStreaming:
             "<tool_call|>",
         ]
 
-        results = self._simulate_streaming(parser, mock_request, chunks)
-        args_text = self._collect_arguments(results)
+        results = simulate_tool_streaming(parser, mock_request, chunks)
+        args_text = collect_tool_arguments(results)
         assert args_text
         parsed = json.loads(args_text)
         assert parsed["input"]["all"] is True
@@ -352,8 +308,8 @@ class TestStreaming:
             "<tool_call|>",
         ]
 
-        results = self._simulate_streaming(parser, mock_request, chunks)
-        args_text = self._collect_arguments(results)
+        results = simulate_tool_streaming(parser, mock_request, chunks)
+        args_text = collect_tool_arguments(results)
         assert args_text
         parsed = json.loads(args_text)
         assert parsed["count"] == 42
@@ -370,8 +326,8 @@ class TestStreaming:
             "<tool_call|>",
         ]
 
-        results = self._simulate_streaming(parser, mock_request, chunks)
-        args_text = self._collect_arguments(results)
+        results = simulate_tool_streaming(parser, mock_request, chunks)
+        args_text = collect_tool_arguments(results)
         assert args_text
 
         parsed = json.loads(args_text)

@@ -13,7 +13,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from vllm.grammar_parser.registered_parsers import GrammarQwen3ReasoningParser
+from tests.grammar_parser.streaming_helpers import simulate_reasoning_streaming
+from vllm.grammar_parser.unified_parsers import Qwen3GrammarParser
 
 _THINK_START_ID = 50
 _THINK_END_ID = 51
@@ -47,42 +48,7 @@ def _make_tokenizer():
 
 @pytest.fixture
 def parser():
-    return GrammarQwen3ReasoningParser(_make_tokenizer())
-
-
-def _stream_and_collect(
-    parser: GrammarQwen3ReasoningParser,
-    chunks: list[str],
-    delta_token_ids_per_chunk: list[tuple[int, ...]] | None = None,
-) -> tuple[str, str]:
-    """Feed chunks through streaming and collect reasoning/content."""
-    reasoning_parts: list[str] = []
-    content_parts: list[str] = []
-    prev_text = ""
-    prev_ids: list[int] = []
-    for i, chunk in enumerate(chunks):
-        cur_text = prev_text + chunk
-        if delta_token_ids_per_chunk is not None:
-            d_ids = delta_token_ids_per_chunk[i]
-        else:
-            d_ids = (0,)
-        cur_ids = prev_ids + list(d_ids)
-        delta = parser.extract_reasoning_streaming(
-            previous_text=prev_text,
-            current_text=cur_text,
-            delta_text=chunk,
-            previous_token_ids=tuple(prev_ids),
-            current_token_ids=tuple(cur_ids),
-            delta_token_ids=d_ids,
-        )
-        if delta:
-            if delta.reasoning:
-                reasoning_parts.append(delta.reasoning)
-            if delta.content:
-                content_parts.append(delta.content)
-        prev_text = cur_text
-        prev_ids = list(cur_ids)
-    return "".join(reasoning_parts), "".join(content_parts)
+    return Qwen3GrammarParser(_make_tokenizer())
 
 
 class TestNonStreaming:
@@ -131,7 +97,6 @@ class TestNonStreaming:
         )
         reasoning, content = parser.extract_reasoning(text, None)
         assert reasoning == "I need to read the file.\n\n"
-        assert content is not None
         assert "</think>" not in reasoning
         assert "<tool_call>" not in reasoning
 
@@ -145,7 +110,6 @@ class TestNonStreaming:
         )
         reasoning, content = parser.extract_reasoning(text, None)
         assert reasoning == "I need to read the file.\n\n"
-        assert content is not None
         assert "<tool_call>" not in reasoning
 
     def test_live_scenario_think_end_before_tool_call(self, parser):
@@ -170,7 +134,6 @@ class TestNonStreaming:
         assert "</think>" not in reasoning
         assert "<tool_call>" not in reasoning
         assert "<parameter=" not in reasoning
-        assert content is not None
 
     def test_no_terminal_text_in_reasoning(self, parser):
         """Terminal text must never appear in reasoning output."""
@@ -219,7 +182,7 @@ class TestIsReasoningEnd:
 
 class TestStreaming:
     def test_basic_streaming(self, parser):
-        reasoning, content = _stream_and_collect(
+        reasoning, content = simulate_reasoning_streaming(
             parser,
             ["<think>", "thinking", " hard", "</think>", "done"],
             [
@@ -235,7 +198,7 @@ class TestStreaming:
 
     def test_streaming_no_start_token(self, parser):
         """Qwen3.5 style: no <think> in output, just reasoning then </think>."""
-        reasoning, content = _stream_and_collect(
+        reasoning, content = simulate_reasoning_streaming(
             parser,
             ["reasoning ", "text", "</think>", "content"],
             [
@@ -250,7 +213,7 @@ class TestStreaming:
 
     def test_streaming_start_token_stripped(self, parser):
         """<think> in output (old template) should be stripped."""
-        reasoning, content = _stream_and_collect(
+        reasoning, content = simulate_reasoning_streaming(
             parser,
             ["<think>reasoning", "</think>", "content"],
             [
@@ -264,7 +227,7 @@ class TestStreaming:
 
     def test_streaming_tool_call_implicit_end(self, parser):
         """<tool_call> ends reasoning implicitly during streaming."""
-        reasoning, content = _stream_and_collect(
+        reasoning, content = simulate_reasoning_streaming(
             parser,
             ["I need to check.", "<tool_call>", "\n<function=test>"],
             [
@@ -280,7 +243,7 @@ class TestStreaming:
 
     def test_streaming_content_after_think_end(self, parser):
         """Content deltas after </think> are routed as content."""
-        reasoning, content = _stream_and_collect(
+        reasoning, content = simulate_reasoning_streaming(
             parser,
             ["reasoning", "</think>", "content1", " content2"],
             [
@@ -295,7 +258,7 @@ class TestStreaming:
 
     def test_streaming_content_after_tool_call(self, parser):
         """Content deltas after <tool_call> are routed as content."""
-        reasoning, content = _stream_and_collect(
+        reasoning, content = simulate_reasoning_streaming(
             parser,
             ["thinking", "<tool_call>", "<function=f>"],
             [
@@ -310,7 +273,7 @@ class TestStreaming:
 
     def test_streaming_end_grouped_with_content(self, parser):
         """</think> grouped with following content in one delta."""
-        reasoning, content = _stream_and_collect(
+        reasoning, content = simulate_reasoning_streaming(
             parser,
             ["reasoning", "</think>the answer"],
             [
@@ -323,7 +286,7 @@ class TestStreaming:
 
     def test_streaming_think_and_end_in_one_delta(self, parser):
         """<think> and </think> in the same delta."""
-        reasoning, content = _stream_and_collect(
+        reasoning, content = simulate_reasoning_streaming(
             parser,
             ["<think>reasoning</think>"],
             [
@@ -335,7 +298,7 @@ class TestStreaming:
 
     def test_streaming_pure_content_no_think(self, parser):
         """No think tokens at all — everything is reasoning (truncated)."""
-        reasoning, content = _stream_and_collect(
+        reasoning, content = simulate_reasoning_streaming(
             parser,
             ["hello ", "world"],
             [
@@ -352,7 +315,7 @@ class TestStreaming:
         Regression test: the old override split at <tool_call> without
         stripping </think>, causing </think> to leak into reasoning.
         """
-        reasoning, content = _stream_and_collect(
+        reasoning, content = simulate_reasoning_streaming(
             parser,
             [
                 "Let me list the directory.",
@@ -375,7 +338,7 @@ class TestStreaming:
 
     def test_streaming_no_terminal_text_leaks(self, parser):
         """Terminal text must never appear in reasoning or content."""
-        reasoning, content = _stream_and_collect(
+        reasoning, content = simulate_reasoning_streaming(
             parser,
             ["reasoning", "</think>", "content"],
             [

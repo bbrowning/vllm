@@ -31,6 +31,22 @@ _GRAMMAR_PARSERS_TO_REGISTER = {
         "vllm.grammar_parser.unified_parsers",
         "Qwen3GrammarParser",
     ),
+    "hermes_grammar": (
+        "vllm.grammar_parser.unified_parsers",
+        "HermesGrammarParser",
+    ),
+    "qwen3_xml_grammar": (
+        "vllm.grammar_parser.unified_parsers",
+        "Qwen3XMLGrammarParser",
+    ),
+    "qwen3_coder_grammar": (
+        "vllm.grammar_parser.unified_parsers",
+        "Qwen3CoderGrammarParser",
+    ),
+    "think_tag_grammar": (
+        "vllm.grammar_parser.unified_parsers",
+        "ThinkTagGrammarParser",
+    ),
 }
 
 

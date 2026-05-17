@@ -14,7 +14,10 @@ from typing import TYPE_CHECKING
 from vllm.entrypoints.openai.engine.protocol import DeltaMessage
 from vllm.grammar_parser.events import SemanticEvent
 from vllm.grammar_parser.grammars.gemma4_unified import gemma4_unified_config
+from vllm.grammar_parser.grammars.hermes import hermes_config
 from vllm.grammar_parser.grammars.qwen3_unified import qwen3_unified_config
+from vllm.grammar_parser.grammars.qwen3xml import qwen3xml_config
+from vllm.grammar_parser.grammars.think_tag import think_tag_config
 from vllm.grammar_parser.unified_parser import GrammarParser
 
 if TYPE_CHECKING:
@@ -180,3 +183,52 @@ class Qwen3GrammarParser(GrammarParser):
                         continue
                     return True
         return False
+
+
+class HermesGrammarParser(GrammarParser):
+    """Unified Hermes parser: ``<tool_call>``/``</tool_call>`` JSON tool
+    calls."""
+
+    def __init__(
+        self,
+        tokenizer: TokenizerLike,
+        tools: list[Tool] | None = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(tokenizer, tools, grammar_config=hermes_config(), **kwargs)
+
+
+class Qwen3XMLGrammarParser(GrammarParser):
+    """Unified Qwen3 XML parser: ``<tool_call><function=...>`` tool calls."""
+
+    def __init__(
+        self,
+        tokenizer: TokenizerLike,
+        tools: list[Tool] | None = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(tokenizer, tools, grammar_config=qwen3xml_config(), **kwargs)
+
+
+class Qwen3CoderGrammarParser(GrammarParser):
+    """Unified Qwen3 Coder parser: same XML format as Qwen3 XML."""
+
+    def __init__(
+        self,
+        tokenizer: TokenizerLike,
+        tools: list[Tool] | None = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(tokenizer, tools, grammar_config=qwen3xml_config(), **kwargs)
+
+
+class ThinkTagGrammarParser(GrammarParser):
+    """Unified think-tag reasoning parser: ``<think>``/``</think>``."""
+
+    def __init__(
+        self,
+        tokenizer: TokenizerLike,
+        tools: list[Tool] | None = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(tokenizer, tools, grammar_config=think_tag_config(), **kwargs)
