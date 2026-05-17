@@ -23,7 +23,7 @@ from vllm.grammar_parser.unified_parsers import (
     Qwen3GrammarParser,
 )
 
-CHUNK_SIZES = [1, 2, 5, 10, 20, None]
+CHUNK_SIZES = [1, 2, 3, 5, 10, 20, None]
 
 _gemma4_samples = load_samples("gemma4")
 _qwen3_samples = load_samples("qwen3")
@@ -96,8 +96,34 @@ class TestQwen3Replay:
         deltas = replay_streaming(parser, sample.tokens, chunk_size=chunk_size)
         output = collect_output(deltas)
 
-        for terminal in ["<think>", "</think>", "<tool_call>", "</tool_call>"]:
+        for terminal in [
+            "<think>",
+            "</think>",
+            "<tool_call>",
+            "</tool_call>",
+            "<function=",
+            "</function>",
+        ]:
             assert terminal not in output.reasoning, (
                 f"{terminal!r} leaked into reasoning"
             )
             assert terminal not in output.content, f"{terminal!r} leaked into content"
+
+
+@pytest.mark.parametrize("holdback", HOLDBACK_CONFIGS, ids=lambda h: f"holdback{h}")
+@pytest.mark.parametrize("chunk_size", [5, 10], ids=lambda c: f"chunk{c}")
+@pytest.mark.parametrize("sample", _qwen3_samples, ids=lambda s: s.id)
+class TestQwen3ReplayWithHoldback:
+    """Replay Qwen3 with simulated detokenizer holdback."""
+
+    def test_parse_output_with_holdback(self, sample, chunk_size, holdback):
+        tokenizer = make_mock_tokenizer(sample)
+        parser = Qwen3GrammarParser(tokenizer)
+        deltas = replay_streaming(
+            parser,
+            sample.tokens,
+            chunk_size=chunk_size,
+            holdback_chars=holdback,
+        )
+        output = collect_output(deltas)
+        assert_parse_output(output, sample)

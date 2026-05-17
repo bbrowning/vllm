@@ -133,30 +133,66 @@ def replay_streaming(
     results: list[DeltaMessage | None] = []
     all_ids = [tid for tid, _ in tokens]
     all_texts = [text for _, text in tokens]
-    prev_safe_text = ""
-    tokenizer = parser.model_tokenizer
+
+    request = ChatCompletionRequest(
+        model="test-model",
+        messages=[{"role": "user", "content": "test"}],
+    )
+
+    if holdback_chars <= 0:
+        for start in range(0, len(tokens), chunk_size):
+            batch_end = min(start + chunk_size, len(tokens))
+            batch_ids = all_ids[start:batch_end]
+            delta_text = "".join(all_texts[start:batch_end])
+
+            result = parser.parse_delta(
+                delta_text,
+                batch_ids,
+                request,
+                prompt_token_ids=[] if start == 0 else None,
+            )
+            results.append(result)
+        return results
+
+    emitted_up_to = 0
+    is_first = True
 
     for start in range(0, len(tokens), chunk_size):
         batch_end = min(start + chunk_size, len(tokens))
-        batch_ids = all_ids[start:batch_end]
 
-        if holdback_chars > 0:
-            full_decoded = tokenizer.decode(all_ids[:batch_end])
-            if batch_end < len(tokens):
-                safe_len = max(0, len(full_decoded) - holdback_chars)
-                safe_text = full_decoded[:safe_len]
-            else:
-                safe_text = full_decoded
-            delta_text = safe_text[len(prev_safe_text) :]
-            prev_safe_text = safe_text
+        if batch_end < len(tokens):
+            held_chars = 0
+            safe_end = batch_end
+            while safe_end > emitted_up_to and held_chars < holdback_chars:
+                safe_end -= 1
+                held_chars += len(all_texts[safe_end])
         else:
-            delta_text = "".join(all_texts[start:batch_end])
+            safe_end = batch_end
+
+        if safe_end <= emitted_up_to:
+            continue
+
+        batch_ids = all_ids[emitted_up_to:safe_end]
+        delta_text = "".join(all_texts[emitted_up_to:safe_end])
+        emitted_up_to = safe_end
 
         result = parser.parse_delta(
             delta_text,
             batch_ids,
             request,
-            prompt_token_ids=[] if start == 0 else None,
+            prompt_token_ids=[] if is_first else None,
+        )
+        results.append(result)
+        is_first = False
+
+    if emitted_up_to < len(tokens):
+        batch_ids = all_ids[emitted_up_to:]
+        delta_text = "".join(all_texts[emitted_up_to:])
+        result = parser.parse_delta(
+            delta_text,
+            batch_ids,
+            request,
+            prompt_token_ids=[] if is_first else None,
         )
         results.append(result)
 
