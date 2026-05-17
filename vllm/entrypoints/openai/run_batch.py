@@ -788,13 +788,18 @@ async def build_endpoint_registry(
 
 
 def validate_run_batch_args(args):
+    from vllm.parser import ParserManager
+
     valid_reasoning_parsers = ReasoningParserManager.list_registered()
-    if (
-        reasoning_parser := args.structured_outputs_config.reasoning_parser
-    ) and reasoning_parser not in valid_reasoning_parsers:
+    valid_unified = ParserManager.list_registered()
+    if (reasoning_parser := args.structured_outputs_config.reasoning_parser) and (
+        reasoning_parser not in valid_reasoning_parsers
+        and reasoning_parser not in valid_unified
+    ):
+        all_valid = sorted(set(valid_reasoning_parsers) | set(valid_unified))
         raise KeyError(
             f"invalid reasoning parser: {reasoning_parser} "
-            f"(chose from {{ {','.join(valid_reasoning_parsers)} }})"
+            f"(chose from {{ {','.join(all_valid)} }})"
         )
 
 

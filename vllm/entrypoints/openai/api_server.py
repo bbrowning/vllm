@@ -514,20 +514,30 @@ def create_server_unix_socket(path: str) -> socket.socket:
 
 
 def validate_api_server_args(args):
+    from vllm.parser import ParserManager
+
     valid_tool_parses = ToolParserManager.list_registered()
-    if args.enable_auto_tool_choice and args.tool_call_parser not in valid_tool_parses:
+    valid_unified = ParserManager.list_registered()
+    if (
+        args.enable_auto_tool_choice
+        and args.tool_call_parser not in valid_tool_parses
+        and args.tool_call_parser not in valid_unified
+    ):
+        all_valid = sorted(set(valid_tool_parses) | set(valid_unified))
         raise KeyError(
             f"invalid tool call parser: {args.tool_call_parser} "
-            f"(chose from {{ {','.join(valid_tool_parses)} }})"
+            f"(chose from {{ {','.join(all_valid)} }})"
         )
 
     valid_reasoning_parsers = ReasoningParserManager.list_registered()
-    if (
-        reasoning_parser := args.structured_outputs_config.reasoning_parser
-    ) and reasoning_parser not in valid_reasoning_parsers:
+    if (reasoning_parser := args.structured_outputs_config.reasoning_parser) and (
+        reasoning_parser not in valid_reasoning_parsers
+        and reasoning_parser not in valid_unified
+    ):
+        all_valid = sorted(set(valid_reasoning_parsers) | set(valid_unified))
         raise KeyError(
             f"invalid reasoning parser: {reasoning_parser} "
-            f"(chose from {{ {','.join(valid_reasoning_parsers)} }})"
+            f"(chose from {{ {','.join(all_valid)} }})"
         )
 
 
