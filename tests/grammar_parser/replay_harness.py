@@ -1,0 +1,255 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+"""Data-driven replay harness for grammar parser testing.
+
+Loads token sequences from JSONL files and replays them through parsers
+at different chunk sizes to verify chunk-size invariance: the same
+token sequence must produce identical output regardless of how tokens
+are batched.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+from unittest.mock import MagicMock
+
+from vllm.entrypoints.openai.chat_completion.protocol import (
+    ChatCompletionRequest,
+)
+from vllm.entrypoints.openai.engine.protocol import DeltaMessage
+
+DATA_DIR = Path(__file__).parent / "data"
+
+
+@dataclass
+class Sample:
+    """One test sample loaded from a JSONL file."""
+
+    id: str
+    description: str
+    source: str
+    vocab: dict[str, int]
+    tokens: list[tuple[int, str]]
+    expected_reasoning: str | None
+    expected_content: str | None
+    expected_tool_calls: list[dict] | None
+
+
+@dataclass
+class ParseOutput:
+    """Accumulated parse output from replaying a token stream."""
+
+    reasoning: str = ""
+    content: str = ""
+    tool_calls: list[dict] = field(default_factory=list)
+
+
+def load_samples(model: str) -> list[Sample]:
+    """Load all samples from ``tests/grammar_parser/data/{model}.jsonl``."""
+    path = DATA_DIR / f"{model}.jsonl"
+    if not path.exists():
+        return []
+
+    samples = []
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        data = json.loads(line)
+        tokens = [(t[0], t[1]) for t in data["tokens"]]
+        expected = data.get("expected", {})
+        samples.append(
+            Sample(
+                id=data["id"],
+                description=data.get("description", ""),
+                source=data.get("source", ""),
+                vocab=data.get("vocab", {}),
+                tokens=tokens,
+                expected_reasoning=expected.get("reasoning"),
+                expected_content=expected.get("content"),
+                expected_tool_calls=expected.get("tool_calls"),
+            )
+        )
+    return samples
+
+
+def make_mock_tokenizer(sample: Sample) -> MagicMock:
+    """Build a mock tokenizer from a sample's vocab and token data."""
+    token_decode_map: dict[int, str] = {}
+    for tid, text in sample.tokens:
+        token_decode_map[tid] = text
+
+    special_text_to_id = dict(sample.vocab)
+
+    tokenizer = MagicMock()
+    tokenizer.get_vocab.return_value = dict(special_text_to_id)
+    tokenizer.encode.return_value = [tid for tid, _ in sample.tokens]
+
+    def decode(ids, skip_special_tokens=False):
+        parts = []
+        for tid in ids:
+            if skip_special_tokens and tid in _inv_special(special_text_to_id):
+                continue
+            text = token_decode_map.get(tid, f"?{tid}?")
+            parts.append(text)
+        return "".join(parts)
+
+    tokenizer.decode.side_effect = decode
+    return tokenizer
+
+
+def _inv_special(vocab: dict[str, int]) -> set[int]:
+    return set(vocab.values())
+
+
+def replay_streaming(
+    parser,
+    tokens: list[tuple[int, str]],
+    chunk_size: int | None = None,
+    holdback_chars: int = 0,
+) -> list[DeltaMessage | None]:
+    """Feed tokens through ``parser.parse_delta()`` at a given chunk size.
+
+    Args:
+        parser: A :class:`Parser` instance with ``parse_delta()`` method.
+        tokens: List of ``(token_id, decoded_text)`` pairs.
+        chunk_size: Number of tokens per batch. ``None`` means all at once.
+        holdback_chars: Simulate detokenizer holdback by holding back
+            this many characters of decoded text between batches.
+
+    Returns:
+        List of ``DeltaMessage`` results from each ``parse_delta()`` call.
+    """
+    if chunk_size is None:
+        chunk_size = len(tokens)
+
+    request = ChatCompletionRequest(
+        model="test-model",
+        messages=[{"role": "user", "content": "test"}],
+    )
+
+    results: list[DeltaMessage | None] = []
+    all_ids = [tid for tid, _ in tokens]
+    all_texts = [text for _, text in tokens]
+    prev_safe_text = ""
+    tokenizer = parser.model_tokenizer
+
+    for start in range(0, len(tokens), chunk_size):
+        batch_end = min(start + chunk_size, len(tokens))
+        batch_ids = all_ids[start:batch_end]
+
+        if holdback_chars > 0:
+            full_decoded = tokenizer.decode(all_ids[:batch_end])
+            if batch_end < len(tokens):
+                safe_len = max(0, len(full_decoded) - holdback_chars)
+                safe_text = full_decoded[:safe_len]
+            else:
+                safe_text = full_decoded
+            delta_text = safe_text[len(prev_safe_text) :]
+            prev_safe_text = safe_text
+        else:
+            delta_text = "".join(all_texts[start:batch_end])
+
+        result = parser.parse_delta(
+            delta_text,
+            batch_ids,
+            request,
+            prompt_token_ids=[] if start == 0 else None,
+        )
+        results.append(result)
+
+    return results
+
+
+def collect_output(results: list[DeltaMessage | None]) -> ParseOutput:
+    """Accumulate ``DeltaMessage`` results into a :class:`ParseOutput`."""
+    output = ParseOutput()
+
+    for r in results:
+        if r is None:
+            continue
+        if r.reasoning:
+            output.reasoning += r.reasoning
+        if r.content:
+            output.content += r.content
+        if r.tool_calls:
+            for tc in r.tool_calls:
+                if tc.function and tc.function.name:
+                    existing = None
+                    for existing_tc in output.tool_calls:
+                        if existing_tc.get("_index") == tc.index:
+                            existing = existing_tc
+                            break
+
+                    if existing is None:
+                        output.tool_calls.append(
+                            {
+                                "_index": tc.index,
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments or "",
+                            }
+                        )
+                    else:
+                        existing["arguments"] += tc.function.arguments or ""
+                elif tc.function and tc.function.arguments:
+                    for existing_tc in output.tool_calls:
+                        if existing_tc.get("_index") == tc.index:
+                            existing_tc["arguments"] += tc.function.arguments
+                            break
+
+    for tc in output.tool_calls:
+        tc.pop("_index", None)
+
+    return output
+
+
+def assert_parse_output(actual: ParseOutput, sample: Sample) -> None:
+    """Compare actual parse output against expected values from a sample."""
+    if sample.expected_reasoning is not None:
+        assert actual.reasoning == sample.expected_reasoning, (
+            f"Reasoning mismatch:\n"
+            f"  expected: {sample.expected_reasoning!r}\n"
+            f"  actual:   {actual.reasoning!r}"
+        )
+
+    if sample.expected_content is not None:
+        assert actual.content == sample.expected_content, (
+            f"Content mismatch:\n"
+            f"  expected: {sample.expected_content!r}\n"
+            f"  actual:   {actual.content!r}"
+        )
+    elif sample.expected_content is None and sample.expected_tool_calls:
+        pass
+
+    if sample.expected_tool_calls is not None:
+        assert len(actual.tool_calls) == len(sample.expected_tool_calls), (
+            f"Tool call count mismatch: "
+            f"expected {len(sample.expected_tool_calls)}, "
+            f"got {len(actual.tool_calls)}"
+        )
+        for i, (expected_tc, actual_tc) in enumerate(
+            zip(sample.expected_tool_calls, actual.tool_calls)
+        ):
+            assert actual_tc["name"] == expected_tc["name"], (
+                f"Tool call {i} name mismatch: "
+                f"expected {expected_tc['name']!r}, "
+                f"got {actual_tc['name']!r}"
+            )
+            if "arguments" in expected_tc:
+                expected_args = expected_tc["arguments"]
+                actual_args_str = actual_tc.get("arguments", "{}")
+                if isinstance(expected_args, dict):
+                    try:
+                        actual_args = json.loads(actual_args_str)
+                    except json.JSONDecodeError as e:
+                        raise AssertionError(
+                            f"Tool call {i} arguments not valid JSON: "
+                            f"{actual_args_str!r}"
+                        ) from e
+                    assert actual_args == expected_args, (
+                        f"Tool call {i} arguments mismatch:\n"
+                        f"  expected: {expected_args}\n"
+                        f"  actual:   {actual_args}"
+                    )
