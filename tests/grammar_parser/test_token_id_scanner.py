@@ -48,29 +48,29 @@ def scanner(tokenizer):
 
 class TestHoldbackTextRecovery:
     def test_holdback_text_with_special_token_text_absent(self, scanner):
-        """The core bug: delta_text has hold-back text but the special
-        token's text is NOT in delta_text (still held back by detokenizer).
-        Text and terminal are both deferred; next scan replays them."""
+        """delta_text has hold-back text but the special token's text is
+        NOT in delta_text (stripped by skip_special_tokens).  Text and
+        terminal are both emitted immediately."""
         result = scanner.scan(
             delta_text="processed is appropriate.",
             delta_token_ids=[CHANNEL_END_ID],
         )
 
-        assert len(result) == 0
-        assert scanner._deferred_post_text == "processed is appropriate."
+        assert len(result) == 2
+        assert isinstance(result[0], TextChunk)
+        assert result[0].text == "processed is appropriate."
+        assert isinstance(result[1], PreLexedTerminal)
+        assert result[1].terminal == "THINK_END"
 
-        # Terminal was deferred — next scan resolves it with stored text.
+        # Second scan: terminal text arrives (detokenizer flushes).
+        # Since the terminal already fired, this is just content text.
         result2 = scanner.scan(
             delta_text="<channel|>Understood.",
             delta_token_ids=[20, 21],
         )
-        pre_lexed = [r for r in result2 if isinstance(r, PreLexedTerminal)]
-        assert len(pre_lexed) == 1
-        assert pre_lexed[0].terminal == "THINK_END"
         texts = [r.text for r in result2 if isinstance(r, TextChunk)]
         combined = "".join(texts)
-        assert "processed is appropriate." in combined
-        assert "Understood." in combined
+        assert "<channel|>" in combined or "Understood." in combined
 
     def test_holdback_text_with_special_token_text_present(self, scanner):
         """delta_text includes hold-back text AND the special token text."""
@@ -196,22 +196,23 @@ class TestHoldbackTextRecovery:
             delta_token_ids=[tok_a, CHANNEL_END_ID, tok_b],
         )
 
-        # Terminal and text are both deferred.
+        # Terminal fires immediately with holdback text emitted first.
         pre_lexed = [r for r in result if isinstance(r, PreLexedTerminal)]
-        assert len(pre_lexed) == 0
-        assert len(result) == 0
+        assert len(pre_lexed) == 1
+        assert pre_lexed[0].terminal == "THINK_END"
+        text_chunks = [r for r in result if isinstance(r, TextChunk)]
+        combined = "".join(t.text for t in text_chunks)
+        assert "holdback" in combined
 
-        # Next delta resolves the deferred terminal with stored text.
+        # Next delta: terminal text arrives (detokenizer flushes).
+        # Since the terminal already fired, this is just content text.
         result2 = scanner_multi.scan(
             delta_text="<channel|> more text",
             delta_token_ids=[300],
         )
-        pre_lexed2 = [r for r in result2 if isinstance(r, PreLexedTerminal)]
-        assert len(pre_lexed2) == 1
-        assert pre_lexed2[0].terminal == "THINK_END"
         text_chunks2 = [r for r in result2 if isinstance(r, TextChunk)]
         combined2 = "".join(t.text for t in text_chunks2)
-        assert "holdback" in combined2
+        assert "more text" in combined2
 
     def test_holdback_with_content_after_special_token(self, tokenizer):
         """delta_text has hold-back + special token + content after,
@@ -241,64 +242,69 @@ class TestHoldbackTextRecovery:
         assert "reasoning end." in combined
 
 
-class TestDeferredTerminals:
-    """Tests for cross-delta terminal deferral when the detokenizer
-    holds back the special token text to a later delta."""
+class TestTerminalWithAbsentText:
+    """Tests for terminal emission when the special token text is
+    absent from delta_text (stripped by skip_special_tokens=True).
+    With token_id_text_in_delta=False (default), terminals fire
+    immediately instead of being deferred."""
 
-    def test_deferred_terminal_resolved_next_delta(self, scanner):
-        """Terminal deferred in delta N, resolved in delta N+1."""
+    def test_terminal_fires_immediately_text_absent(self, scanner):
+        """Terminal fires immediately even when its text is absent.
+        Holdback text is emitted first as TextChunk."""
         r1 = scanner.scan(
             delta_text="reasoning tail.",
             delta_token_ids=[CHANNEL_END_ID],
         )
-        assert len(r1) == 0
+        assert len(r1) == 2
+        assert isinstance(r1[0], TextChunk)
+        assert r1[0].text == "reasoning tail."
+        assert isinstance(r1[1], PreLexedTerminal)
+        assert r1[1].terminal == "THINK_END"
 
+        # Next delta: terminal text arrives (detokenizer flushes).
+        # Since the terminal already fired, this is just content text.
         r2 = scanner.scan(
             delta_text="<channel|>Content here.",
             delta_token_ids=[20],
         )
-        pre_lexed = [r for r in r2 if isinstance(r, PreLexedTerminal)]
-        assert len(pre_lexed) == 1
-        assert pre_lexed[0].terminal == "THINK_END"
         texts = [r.text for r in r2 if isinstance(r, TextChunk)]
         combined = "".join(texts)
-        assert "reasoning tail." in combined
         assert "Content here." in combined
 
-    def test_deferred_terminal_flush_at_end(self, scanner):
-        """Deferred terminal flushed at end-of-stream if never resolved."""
+    def test_terminal_fires_immediately_no_flush_needed(self, scanner):
+        """Terminal fires immediately; flush_pending returns nothing."""
         r1 = scanner.scan(
             delta_text="some holdback text",
             delta_token_ids=[CHANNEL_END_ID],
         )
-        assert len(r1) == 0
+        assert len(r1) == 2
+        assert isinstance(r1[0], TextChunk)
+        assert r1[0].text == "some holdback text"
+        assert isinstance(r1[1], PreLexedTerminal)
+        assert r1[1].terminal == "THINK_END"
 
         flushed = scanner.flush_pending()
-        assert len(flushed) == 2
-        assert isinstance(flushed[0], TextChunk)
-        assert flushed[0].text == "some holdback text"
-        assert isinstance(flushed[1], PreLexedTerminal)
-        assert flushed[1].terminal == "THINK_END"
+        assert len(flushed) == 0
 
-    def test_deferred_terminal_with_holdback_before_and_content_after(self, scanner):
-        """Realistic scenario: delta has holdback text + channel_end token,
-        but channel_end text appears in next delta along with content."""
+    def test_terminal_fires_immediately_with_holdback_and_later_content(self, scanner):
+        """Holdback text + stripped terminal fires immediately.
+        Next delta's content is processed normally."""
         r1 = scanner.scan(
             delta_text="the server is responding.",
             delta_token_ids=[CHANNEL_END_ID],
         )
-        assert len(r1) == 0
+        assert len(r1) == 2
+        assert isinstance(r1[0], TextChunk)
+        assert r1[0].text == "the server is responding."
+        assert isinstance(r1[1], PreLexedTerminal)
+        assert r1[1].terminal == "THINK_END"
 
         r2 = scanner.scan(
             delta_text="<channel|>Understood, I'll help.",
             delta_token_ids=[30, 31],
         )
-        terminals = [r for r in r2 if isinstance(r, PreLexedTerminal)]
-        assert len(terminals) == 1
-        assert terminals[0].terminal == "THINK_END"
         texts = [r.text for r in r2 if isinstance(r, TextChunk)]
         combined = "".join(texts)
-        assert "the server is responding." in combined
         assert "Understood, I'll help." in combined
 
     def test_no_deferred_when_text_present(self, scanner):
@@ -312,9 +318,9 @@ class TestDeferredTerminals:
 
         assert len(scanner._deferred_terminals) == 0
 
-    def test_deferred_resolution_does_not_swallow_current_tokens(self, tokenizer):
-        """When deferred terminals are resolved, the current delta's
-        token IDs must still be scanned for new special tokens."""
+    def test_immediate_terminal_does_not_swallow_current_tokens(self, tokenizer):
+        """When a terminal fires immediately (text absent), the next
+        delta's token IDs must still be scanned for new special tokens."""
         tool_call_id = 500
         tokenizer.decode.side_effect = lambda ids: {
             CHANNEL_END_ID: CHANNEL_END,
@@ -331,13 +337,18 @@ class TestDeferredTerminals:
         )
 
         # Delta 1: reasoning holdback + channel end (text absent).
+        # Terminal fires immediately.
         r1 = scanner.scan(
             delta_text="reasoning tail",
             delta_token_ids=[CHANNEL_END_ID],
         )
-        assert len(r1) == 0
+        assert len(r1) == 2
+        assert isinstance(r1[0], TextChunk)
+        assert r1[0].text == "reasoning tail"
+        assert isinstance(r1[1], PreLexedTerminal)
+        assert r1[1].terminal == "THINK_END"
 
-        # Delta 2: deferred channel end text + content + tool call token.
+        # Delta 2: channel end text (already consumed) + content + tool call.
         r2 = scanner.scan(
             delta_text="<channel|>content <|tool_call>",
             delta_token_ids=[201, tool_call_id],
@@ -345,14 +356,13 @@ class TestDeferredTerminals:
 
         terminals = [r for r in r2 if isinstance(r, PreLexedTerminal)]
         terminal_names = [t.terminal for t in terminals]
-        assert "THINK_END" in terminal_names
         assert "TOOL_START" in terminal_names
 
 
 class TestDropTokens:
     def test_drop_token_with_holdback(self, tokenizer):
         """Drop tokens stripped from delta_text, hold-back text preserved.
-        Terminal is deferred since its text isn't in clean delta."""
+        Terminal fires immediately with text emitted first."""
         drop_id = 300
         tokenizer.decode.side_effect = lambda ids: {
             CHANNEL_END_ID: CHANNEL_END,
@@ -370,19 +380,17 @@ class TestDropTokens:
             delta_token_ids=[drop_id, CHANNEL_END_ID],
         )
 
-        # Terminal and text both deferred.
-        pre_lexed = [r for r in result if isinstance(r, PreLexedTerminal)]
-        assert len(pre_lexed) == 0
-        assert len(result) == 0
+        # Terminal fires immediately; holdback text emitted first.
+        assert len(result) == 2
+        assert isinstance(result[0], TextChunk)
+        assert "holdback" in result[0].text
+        assert "<eos>" not in result[0].text
+        assert isinstance(result[1], PreLexedTerminal)
+        assert result[1].terminal == "THINK_END"
 
-        # Deferred terminal resolves on next delta or flush.
+        # Nothing left to flush.
         flushed = scanner.flush_pending()
-        assert len(flushed) == 2
-        assert isinstance(flushed[0], TextChunk)
-        assert "holdback" in flushed[0].text
-        assert "<eos>" not in flushed[0].text
-        assert isinstance(flushed[1], PreLexedTerminal)
-        assert flushed[1].terminal == "THINK_END"
+        assert len(flushed) == 0
 
 
 class TestEndToEndReasoningHoldback:

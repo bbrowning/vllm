@@ -26,4 +26,5 @@ def gemma4_channel_config():
         name="gemma4_channel",
     )
     config.drop_tokens = GEMMA4_DROP_TOKENS - {"<|channel>", "<channel|>"}
+    config.token_id_text_in_delta = True
     return config

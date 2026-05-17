@@ -647,6 +647,71 @@ class TestStreamingWithSpecialTokenIDs:
         name = self._collect_function_name(results)
         assert name == "refresh"
 
+    def test_holdback_with_stripped_tool_end_two_calls(self, parser, mock_request):
+        """Two parallel tool calls where </tool_call> is stripped and
+        detokenizer hold-back text arrives in the same delta.
+
+        Reproduces the bug where the second tool call's parameters are
+        silently dropped because </tool_call> fires before </function>
+        is lexed."""
+        deltas = [
+            # First tool call: <tool_call> stripped
+            ("\n<function=Bash>\n", [100, 1, 2, 3]),
+            ("<parameter=command>\necho hi\n</parameter>\n", [4, 5, 6, 7]),
+            # </function> text arrives, then </tool_call> stripped with
+            # hold-back "\n" flushed in the same delta
+            ("</function>\n", [8, 9, 101, 10]),
+            # Second tool call: <tool_call> stripped
+            ("\n<function=Read>\n", [100, 11, 12, 13]),
+            (
+                "<parameter=file_path>\n/workspace/main.py\n</parameter>\n",
+                [14, 15, 16, 17],
+            ),
+            ("</function>\n", [18, 19]),
+            ("", [101]),
+        ]
+        results = self._simulate_streaming_with_token_ids(parser, mock_request, deltas)
+
+        names = []
+        for delta, _ in results:
+            if delta and delta.tool_calls:
+                for tc in delta.tool_calls:
+                    if tc.function and tc.function.name:
+                        names.append(tc.function.name)
+
+        assert "Bash" in names
+        assert "Read" in names
+
+    def test_holdback_stripped_end_then_start_same_delta(self, parser, mock_request):
+        """</tool_call> and <tool_call> both stripped in a single delta
+        with hold-back text — worst case for parallel tool calls."""
+        deltas = [
+            # First tool call
+            ("\n<function=Bash>\n", [100, 1, 2, 3]),
+            ("<parameter=cmd>\nls\n</parameter>\n</function>", [4, 5, 6, 7]),
+            # Both </tool_call> and <tool_call> stripped, newlines flushed
+            ("\n\n", [101, 8, 100, 9]),
+            # Second tool call continues
+            ("<function=Read>\n", [10, 11, 12]),
+            (
+                "<parameter=file_path>\n/tmp/f.py\n</parameter>\n",
+                [13, 14, 15, 16],
+            ),
+            ("</function>\n", [17, 18]),
+            ("", [101]),
+        ]
+        results = self._simulate_streaming_with_token_ids(parser, mock_request, deltas)
+
+        names = []
+        for delta, _ in results:
+            if delta and delta.tool_calls:
+                for tc in delta.tool_calls:
+                    if tc.function and tc.function.name:
+                        names.append(tc.function.name)
+
+        assert "Bash" in names
+        assert "Read" in names
+
 
 class TestArgConverter:
     """Direct tests for the qwen3xml arg_converter with multi-line values."""

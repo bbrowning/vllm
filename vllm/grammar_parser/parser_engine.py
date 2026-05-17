@@ -67,7 +67,12 @@ class StreamingParserEngine:
                 if tid is not None:
                     drop_token_ids.add(tid)
 
-        self._scanner = TokenIDScanner(resolved_token_ids, tokenizer, drop_token_ids)
+        self._scanner = TokenIDScanner(
+            resolved_token_ids,
+            tokenizer,
+            drop_token_ids,
+            token_id_text_in_delta=config.token_id_text_in_delta,
+        )
 
         terminal_defs = terminals_from_literals(config.terminals)
         self._lexer = IncrementalLexer(terminal_defs, content_terminal="__CONTENT__")

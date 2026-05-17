@@ -47,11 +47,14 @@ class TokenIDScanner:
         token_id_to_terminal: dict[int, str],
         tokenizer,
         drop_token_ids: set[int] | None = None,
+        *,
+        token_id_text_in_delta: bool = False,
     ) -> None:
         self.token_id_to_terminal = token_id_to_terminal
         self.tokenizer = tokenizer
         self._token_text_cache: dict[int, str] = {}
         self._drop_token_ids = drop_token_ids or set()
+        self._token_id_text_in_delta = token_id_text_in_delta
         self._deferred_terminals: list[PreLexedTerminal] = []
         self._deferred_post_text: str = ""
 
@@ -237,8 +240,11 @@ class TokenIDScanner:
         # state machine in sync with the actual text stream.
         new_results: list[LexerInput] = []
         remaining = delta_text
+        seen_text_before = False
         for item in results:
             if not isinstance(item, PreLexedTerminal):
+                if isinstance(item, TextChunk) and item.text:
+                    seen_text_before = True
                 continue
             pos = remaining.find(item.text)
             if pos > 0:
@@ -249,13 +255,33 @@ class TokenIDScanner:
                 new_results.append(item)
                 remaining = remaining[len(item.text) :]
             else:
-                # Terminal text not in delta_text — detokenizer hasn't
-                # flushed it yet.  Store remaining text so it can be
-                # replayed after the terminal fires in _resolve_deferred.
-                if remaining:
-                    self._deferred_post_text += remaining
-                    remaining = ""
-                self._deferred_terminals.append(item)
+                if self._token_id_text_in_delta:
+                    # Text will arrive in a later delta (detokenizer
+                    # holdback, skip_special_tokens=False).  Store
+                    # preceding text so _resolve_deferred can replay
+                    # it contiguously with the arriving terminal text.
+                    if remaining:
+                        self._deferred_post_text += remaining
+                        remaining = ""
+                    self._deferred_terminals.append(item)
+                else:
+                    # Text permanently stripped (skip_special_tokens).
+                    # Use token order to determine placement: if text
+                    # tokens preceded this terminal, OR if this is a
+                    # lone terminal with holdback text (no text tokens
+                    # follow), emit remaining text first so text-matched
+                    # terminals (e.g. </function> → FUNC_END) fire
+                    # before this one.
+                    has_text_after = not seen_text_before and any(
+                        isinstance(r, TextChunk) and r.text
+                        for r in results[results.index(item) + 1 :]
+                    )
+                    text_before = remaining and (seen_text_before or not has_text_after)
+                    if text_before:
+                        new_results.append(TextChunk(remaining))
+                        remaining = ""
+                    new_results.append(item)
+            seen_text_before = False
         if remaining:
             new_results.append(TextChunk(remaining))
         return new_results

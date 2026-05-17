@@ -577,3 +577,34 @@ class TestStreamingWithSpecialTokenIDs:
         parsed = json.loads(args_text)
         assert "find /workspace" in parsed["command"]
         assert "Find Python files" in parsed["description"]
+
+    def test_holdback_with_stripped_tool_end_two_calls(self, parser, mock_request):
+        """Two parallel tool calls where </tool_call> is stripped and
+        detokenizer hold-back text arrives in the same delta.
+
+        Reproduces the bug where the second tool call's parameters are
+        silently dropped because </tool_call> fires before </function>
+        is lexed."""
+        deltas = [
+            ("\n<function=Bash>\n", [100, 1, 2, 3]),
+            ("<parameter=command>\necho hi\n</parameter>\n", [4, 5, 6, 7]),
+            ("</function>\n", [8, 9, 101, 10]),
+            ("\n<function=Read>\n", [100, 11, 12, 13]),
+            (
+                "<parameter=file_path>\n/workspace/main.py\n</parameter>\n",
+                [14, 15, 16, 17],
+            ),
+            ("</function>\n", [18, 19]),
+            ("", [101]),
+        ]
+        results = self._simulate_streaming_with_token_ids(parser, mock_request, deltas)
+
+        names = []
+        for delta, _ in results:
+            if delta and delta.tool_calls:
+                for tc in delta.tool_calls:
+                    if tc.function and tc.function.name:
+                        names.append(tc.function.name)
+
+        assert "Bash" in names
+        assert "Read" in names
