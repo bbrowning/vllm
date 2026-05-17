@@ -33,6 +33,7 @@ from vllm.entrypoints.openai.engine.protocol import (
 from vllm.grammar_parser.events import EventType, SemanticEvent
 from vllm.grammar_parser.grammar_config import GrammarConfig
 from vllm.grammar_parser.parser_engine import StreamingParserEngine
+from vllm.logger import init_logger
 from vllm.parser.abstract_parser import Parser, StreamState
 
 if TYPE_CHECKING:
@@ -42,6 +43,8 @@ if TYPE_CHECKING:
     from vllm.entrypoints.openai.responses.protocol import ResponsesRequest
     from vllm.tokenizers import TokenizerLike
     from vllm.tool_parsers.abstract_tool_parser import Tool
+
+logger = init_logger(__name__)
 
 _DUMP_PATH = os.environ.get("VLLM_DUMP_PARSER_TOKENS")
 
@@ -74,6 +77,12 @@ class GrammarParser(Parser):
         self._streamed_json: list[str] = []
 
         self._capture_tokens: list[list] | None = [] if _DUMP_PATH else None
+        if self._capture_tokens is not None:
+            logger.info(
+                "Token capture enabled for %s -> %s",
+                grammar_config.name,
+                _DUMP_PATH,
+            )
 
         vocab = self.vocab
         self._reasoning_start_token_id: int | None = None
@@ -90,9 +99,13 @@ class GrammarParser(Parser):
     def vocab(self) -> dict[str, int]:
         return self.model_tokenizer.get_vocab()
 
+    def __del__(self) -> None:
+        self.flush_capture()
+
     # ── Engine lifecycle ──────────────────────────────────────────────
 
     def _reset(self) -> None:
+        self.flush_capture()
         self._engine = StreamingParserEngine(
             self.grammar_config,
             self.model_tokenizer,
@@ -162,6 +175,11 @@ class GrammarParser(Parser):
         with open(_DUMP_PATH, "a") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
+        logger.info(
+            "Flushed %d tokens to %s",
+            len(self._capture_tokens),
+            _DUMP_PATH,
+        )
         self._capture_tokens = []
 
     # ── Non-streaming: extract_reasoning ──────────────────────────────
