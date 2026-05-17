@@ -211,12 +211,14 @@ class ParserManager:
                     "Llama3.2 models may struggle to emit valid pythonic tool calls"
                 )
             parser = ToolParserManager.get_tool_parser(tool_parser_name)
-        except Exception as e:
+        except Exception:
+            if tool_parser_name in cls.parsers or tool_parser_name in cls.lazy_parsers:
+                return None
             raise TypeError(
                 "Error: --enable-auto-tool-choice requires "
                 f"tool_parser:'{tool_parser_name}' which has not "
                 "been registered"
-            ) from e
+            ) from None
         return parser
 
     @classmethod
@@ -233,8 +235,15 @@ class ParserManager:
         try:
             parser = ReasoningParserManager.get_reasoning_parser(reasoning_parser_name)
             assert parser is not None
-        except Exception as e:
-            raise TypeError(f"{reasoning_parser_name=} has not been registered") from e
+        except Exception:
+            if (
+                reasoning_parser_name in cls.parsers
+                or reasoning_parser_name in cls.lazy_parsers
+            ):
+                return None
+            raise TypeError(
+                f"{reasoning_parser_name=} has not been registered"
+            ) from None
         return parser
 
     @classmethod
