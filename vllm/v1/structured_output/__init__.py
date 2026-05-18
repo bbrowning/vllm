@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from vllm.config import VllmConfig
 from vllm.logger import init_logger
+from vllm.parser import ParserManager
 from vllm.reasoning import ReasoningParserManager
 from vllm.tokenizers import cached_tokenizer_from_config
 from vllm.utils.import_utils import LazyLoader
@@ -89,9 +90,14 @@ class StructuredOutputManager:
                 self.vllm_config.structured_outputs_config.reasoning_parser
             )
             if reasoning_parser:
-                self.reasoner_cls = ReasoningParserManager.get_reasoning_parser(
-                    reasoning_parser
-                )
+                try:
+                    self.reasoner_cls = ReasoningParserManager.get_reasoning_parser(
+                        reasoning_parser
+                    )
+                except KeyError:
+                    self.reasoner_cls = ParserManager.get_parser_internal(  # type: ignore[assignment]
+                        reasoning_parser
+                    )
 
         self.enable_in_reasoning = (
             self.vllm_config.structured_outputs_config.enable_in_reasoning

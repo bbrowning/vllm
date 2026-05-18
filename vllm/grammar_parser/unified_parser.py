@@ -95,6 +95,14 @@ class GrammarParser(Parser):
         if end_text:
             self._reasoning_end_token_id = vocab.get(end_text)
 
+    @property
+    def reasoning_start_str(self) -> str | None:
+        return self.grammar_config.terminals.get("THINK_START")
+
+    @property
+    def reasoning_end_str(self) -> str | None:
+        return self.grammar_config.terminals.get("THINK_END")
+
     @cached_property
     def vocab(self) -> dict[str, int]:
         return self.model_tokenizer.get_vocab()
