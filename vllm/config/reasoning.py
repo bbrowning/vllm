@@ -5,7 +5,6 @@ from dataclasses import field
 
 from vllm.config.model import ModelConfig
 from vllm.config.utils import config
-from vllm.parser import ParserManager
 from vllm.reasoning import ReasoningParserManager
 from vllm.tokenizers import cached_tokenizer_from_config
 
@@ -80,6 +79,8 @@ class ReasoningConfig:
                     self.reasoning_parser
                 )
             except KeyError:
+                from vllm.parser import ParserManager
+
                 parser_cls = ParserManager.get_parser_internal(  # type: ignore[assignment]
                     self.reasoning_parser
                 )
