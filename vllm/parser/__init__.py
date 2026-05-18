@@ -45,7 +45,7 @@ _GRAMMAR_PARSERS_TO_REGISTER = {
     ),
     "qwen3_coder_grammar": (
         "vllm.grammar_parser.unified_parsers",
-        "Qwen3CoderGrammarParser",
+        "Qwen3XMLGrammarParser",
     ),
     "think_tag_grammar": (
         "vllm.grammar_parser.unified_parsers",

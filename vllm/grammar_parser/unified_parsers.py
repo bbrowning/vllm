@@ -211,18 +211,6 @@ class Qwen3XMLGrammarParser(GrammarParser):
         super().__init__(tokenizer, tools, grammar_config=qwen3xml_config(), **kwargs)
 
 
-class Qwen3CoderGrammarParser(GrammarParser):
-    """Unified Qwen3 Coder parser: same XML format as Qwen3 XML."""
-
-    def __init__(
-        self,
-        tokenizer: TokenizerLike,
-        tools: list[Tool] | None = None,
-        **kwargs,
-    ) -> None:
-        super().__init__(tokenizer, tools, grammar_config=qwen3xml_config(), **kwargs)
-
-
 class ThinkTagGrammarParser(GrammarParser):
     """Unified think-tag reasoning parser: ``<think>``/``</think>``."""
 

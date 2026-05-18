@@ -11,5 +11,22 @@ ambiguity buffering, token-ID mapping, and delta computation.
 """
 
 from vllm.grammar_parser.events import EventType, SemanticEvent
+from vllm.grammar_parser.unified_parsers import (
+    DeepSeekV4GrammarParser,
+    Gemma4GrammarParser,
+    HermesGrammarParser,
+    Qwen3GrammarParser,
+    Qwen3XMLGrammarParser,
+    ThinkTagGrammarParser,
+)
 
-__all__ = ["EventType", "SemanticEvent"]
+__all__ = [
+    "DeepSeekV4GrammarParser",
+    "EventType",
+    "Gemma4GrammarParser",
+    "HermesGrammarParser",
+    "Qwen3GrammarParser",
+    "Qwen3XMLGrammarParser",
+    "SemanticEvent",
+    "ThinkTagGrammarParser",
+]
