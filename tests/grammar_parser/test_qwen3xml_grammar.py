@@ -651,3 +651,107 @@ class TestArgConverter:
         result = json.loads(_qwen3xml_arg_converter(raw, partial=True))
         assert result["command"] == "ls -la"
         assert result["desc"] == "\npartial value"
+
+
+class TestSchemaAwareTypeCoercion:
+    """Verify that _fix_arg_types corrects mis-coerced values using the
+    tool schema."""
+
+    @pytest.fixture
+    def tools(self):
+        from vllm.entrypoints.openai.chat_completion.protocol import (
+            ChatCompletionToolsParam,
+        )
+
+        return [
+            ChatCompletionToolsParam(
+                type="function",
+                function={
+                    "name": "TaskUpdate",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "taskId": {"type": "string"},
+                            "count": {"type": "integer"},
+                            "ratio": {"type": "number"},
+                            "flag": {"type": "string"},
+                        },
+                    },
+                },
+            )
+        ]
+
+    @pytest.fixture
+    def parser_with_tools(self, mock_tokenizer, tools):
+        return GrammarParser(
+            mock_tokenizer,
+            tools=tools,
+            grammar_config=qwen3xml_config(),
+        )
+
+    def test_string_param_not_coerced_to_int(self, parser_with_tools, mock_request):
+        text = (
+            "<tool_call>\n"
+            "<function=TaskUpdate>\n"
+            "<parameter=taskId>1</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+        result = parser_with_tools.extract_tool_calls(text, mock_request)
+        assert result.tools_called
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args["taskId"] == "1"
+        assert isinstance(args["taskId"], str)
+
+    def test_string_param_not_coerced_to_bool(self, parser_with_tools, mock_request):
+        text = (
+            "<tool_call>\n"
+            "<function=TaskUpdate>\n"
+            "<parameter=flag>true</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+        result = parser_with_tools.extract_tool_calls(text, mock_request)
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args["flag"] == "true"
+        assert isinstance(args["flag"], str)
+
+    def test_int_param_still_coerced(self, parser_with_tools, mock_request):
+        text = (
+            "<tool_call>\n"
+            "<function=TaskUpdate>\n"
+            "<parameter=count>42</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+        result = parser_with_tools.extract_tool_calls(text, mock_request)
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args["count"] == 42
+        assert isinstance(args["count"], int)
+
+    def test_no_tools_falls_back_to_blind_coercion(self, parser, mock_request):
+        text = (
+            "<tool_call>\n"
+            "<function=TaskUpdate>\n"
+            "<parameter=taskId>1</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+        result = parser.extract_tool_calls(text, mock_request)
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args["taskId"] == 1
+        assert isinstance(args["taskId"], int)
+
+    def test_streaming_string_param_not_coerced(self, parser_with_tools, mock_request):
+        chunks = [
+            "<tool_call>\n",
+            "<function=TaskUpdate>\n",
+            "<parameter=taskId>1</parameter>\n",
+            "</function>\n",
+            "</tool_call>",
+        ]
+        results = simulate_tool_streaming(parser_with_tools, mock_request, chunks)
+        args_str = collect_tool_arguments(results)
+        args = json.loads(args_str)
+        assert args["taskId"] == "1"
+        assert isinstance(args["taskId"], str)

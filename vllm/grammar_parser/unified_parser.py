@@ -35,6 +35,7 @@ from vllm.grammar_parser.grammar_config import GrammarConfig
 from vllm.grammar_parser.parser_engine import StreamingParserEngine
 from vllm.logger import init_logger
 from vllm.parser.abstract_parser import Parser, StreamState
+from vllm.tool_parsers.utils import find_tool_properties
 
 if TYPE_CHECKING:
     from vllm.entrypoints.openai.chat_completion.protocol import (
@@ -65,6 +66,7 @@ class GrammarParser(Parser):
         **kwargs,
     ) -> None:
         super().__init__(tokenizer)
+        self._tools = tools
         self.grammar_config = grammar_config
         self._engine = StreamingParserEngine(grammar_config, tokenizer)
 
@@ -125,6 +127,46 @@ class GrammarParser(Parser):
         self._name_sent.clear()
         self._streamed_json.clear()
         self._stream_state = StreamState()
+
+    # ── Schema-aware type correction ─────────────────────────────────
+
+    def _fix_arg_types(self, args_json: str, func_name: str) -> str:
+        """Correct parameter types wrongly coerced by the arg_converter.
+
+        The arg_converter may blindly coerce e.g. ``"1"`` to ``1``.  If the
+        tool schema declares the parameter as ``"string"``, revert to string.
+        """
+        if not self._tools or not func_name:
+            return args_json
+        try:
+            args = json.loads(args_json)
+        except (json.JSONDecodeError, ValueError):
+            return args_json
+        if not isinstance(args, dict):
+            return args_json
+
+        properties = find_tool_properties(self._tools, func_name)
+        if not properties:
+            return args_json
+
+        changed = False
+        for key, value in args.items():
+            if isinstance(value, str):
+                continue
+            prop = properties.get(key)
+            if not isinstance(prop, dict) or prop.get("type") != "string":
+                continue
+            if isinstance(value, bool):
+                args[key] = "true" if value else "false"
+            elif value is None:
+                args[key] = "null"
+            else:
+                args[key] = str(value)
+            changed = True
+
+        if changed:
+            return json.dumps(args, ensure_ascii=False)
+        return args_json
 
     # ── Streaming: parse_delta ────────────────────────────────────────
 
@@ -554,6 +596,9 @@ class GrammarParser(Parser):
         except Exception:
             return None
 
+        if final_json and idx < len(self._tool_names):
+            final_json = self._fix_arg_types(final_json, self._tool_names[idx])
+
         prev = self._streamed_json[idx]
         if final_json and len(final_json) > len(prev):
             diff = final_json[len(prev) :]
@@ -606,6 +651,7 @@ class GrammarParser(Parser):
                 args_json = "{}"
 
             if name:
+                args_json = self._fix_arg_types(args_json, name)
                 tool_calls.append(
                     ToolCall(
                         id=self._tool_call_ids[idx],
