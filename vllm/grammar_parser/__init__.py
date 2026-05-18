@@ -4,10 +4,10 @@
 Grammar-driven streaming parser framework for tool call and reasoning
 extraction.
 
-Instead of hand-rolling a state machine for every model's tool-call /
-reasoning format, each format is declared as a Lark grammar and a shared
-incremental engine handles streaming, ambiguity buffering, token-ID
-mapping, and delta computation.
+Instead of hand-rolling a parser for every model's tool-call / reasoning
+format, each format is declared as a GrammarConfig (terminals, states,
+and transitions) and a shared incremental engine handles streaming,
+ambiguity buffering, token-ID mapping, and delta computation.
 """
 
 from vllm.grammar_parser.events import EventType, SemanticEvent

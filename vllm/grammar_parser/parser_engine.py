@@ -77,7 +77,7 @@ class StreamingParserEngine:
         terminal_defs = terminals_from_literals(config.terminals)
         self._lexer = IncrementalLexer(terminal_defs, content_terminal="__CONTENT__")
 
-        self._args_buffer = ""
+        self._args_buffer: list[str] = []
         self._args_brace_depth = 0
         self._args_in_string = False
         self._args_escape_next = False
@@ -143,11 +143,43 @@ class StreamingParserEngine:
             events.append(
                 SemanticEvent(
                     EventType.ARG_VALUE_CHUNK,
-                    value=self._args_buffer,
+                    value="".join(self._args_buffer),
                     tool_index=self.tool_index,
                 )
             )
-            self._args_buffer = ""
+            self._args_buffer = []
+
+        if self.state in (
+            ParserState.TOOL_ARGS,
+            ParserState.TOOL_NAME,
+            ParserState.TOOL_BETWEEN,
+        ):
+            events.append(
+                SemanticEvent(
+                    EventType.TOOL_CALL_END,
+                    tool_index=self.tool_index,
+                )
+            )
+            events.append(
+                SemanticEvent(
+                    EventType.TOOL_SECTION_END,
+                    tool_index=self.tool_index,
+                )
+            )
+            self.state = ParserState.CONTENT
+        elif self.state == ParserState.TOOL_PREAMBLE:
+            events.append(
+                SemanticEvent(
+                    EventType.TOOL_SECTION_END,
+                    tool_index=self.tool_index,
+                )
+            )
+            self.state = ParserState.CONTENT
+        elif self.state == ParserState.REASONING:
+            events.append(
+                SemanticEvent(EventType.REASONING_END, tool_index=self.tool_index)
+            )
+            self.state = ParserState.CONTENT
 
         return events
 
@@ -229,11 +261,11 @@ class StreamingParserEngine:
                 events.append(
                     SemanticEvent(
                         EventType.ARG_VALUE_CHUNK,
-                        value=self._args_buffer,
+                        value="".join(self._args_buffer),
                         tool_index=self.tool_index,
                     )
                 )
-                self._args_buffer = ""
+                self._args_buffer = []
             self._args_brace_depth = 0
             self._args_in_string = False
             self._args_escape_next = False
@@ -272,7 +304,7 @@ class StreamingParserEngine:
 
     def _feed_args_char(self, ch: str) -> list[SemanticEvent]:
         """Process one character of argument content."""
-        self._args_buffer += ch
+        self._args_buffer.append(ch)
 
         if self._args_escape_next:
             self._args_escape_next = False
@@ -308,12 +340,13 @@ class StreamingParserEngine:
         are safe to emit.  Top-level closing braces are held back
         until confirmed by a subsequent terminal.
         """
+        buf = "".join(self._args_buffer)
         safe_end = 0
         depth = 0
         in_str = False
         escape = False
 
-        for i, ch in enumerate(self._args_buffer):
+        for i, ch in enumerate(buf):
             if escape:
                 escape = False
                 safe_end = i + 1
@@ -341,8 +374,9 @@ class StreamingParserEngine:
         if safe_end == 0:
             return []
 
-        to_emit = self._args_buffer[:safe_end]
-        self._args_buffer = self._args_buffer[safe_end:]
+        to_emit = buf[:safe_end]
+        remainder = buf[safe_end:]
+        self._args_buffer = [remainder] if remainder else []
 
         return [
             SemanticEvent(
