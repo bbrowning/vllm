@@ -327,6 +327,16 @@ class TestNonStreamingReasoning:
         assert "<think>" not in reasoning
         assert "</think>" not in reasoning
 
+    def test_bare_think_end_suppresses_thinking(self, parser, mock_request):
+        # Model emits </think> without a prior <think> to suppress reasoning.
+        # The tag should be silently absorbed, not leaked into content.
+        text = "</think>Here is the direct answer."
+        reasoning, content = parser.extract_reasoning(text, mock_request)
+        assert reasoning is None
+        assert content is not None
+        assert "</think>" not in content
+        assert "Here is the direct answer" in content
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Streaming tool calls

@@ -23,6 +23,10 @@ Initial state is CONTENT because:
 - In thinking mode the model generates ``<think>`` itself as its first token.
 - In chat mode the prompt pre-fills ``</think>`` so the model starts outputting
   content directly.
+
+A bare ``</think>`` in CONTENT state (no preceding ``<think>``) is silently
+absorbed so that models which suppress their thinking by emitting ``</think>``
+immediately do not leak the tag into text content.
 """
 
 from __future__ import annotations
@@ -111,6 +115,11 @@ def deepseek_v4_unified_config() -> GrammarConfig:
             (ParserState.CONTENT, "THINK_START"): Transition(
                 ParserState.REASONING,
                 [EventType.REASONING_START],
+            ),
+            # Absorb a bare </think> with no prior <think> (model skips reasoning)
+            (ParserState.CONTENT, "THINK_END"): Transition(
+                ParserState.CONTENT,
+                [],
             ),
             # Absorb a duplicate <think> while already reasoning
             (ParserState.REASONING, "THINK_START"): Transition(
