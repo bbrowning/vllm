@@ -82,6 +82,27 @@ def _parse_gemma4_value(value_str: str) -> object:
     return value_str
 
 
+_PARTIAL_DELIM_SUFFIXES = tuple(
+    STRING_DELIM[:k] for k in range(len(STRING_DELIM), 0, -1)
+)
+
+
+def _strip_partial_delim(value: str) -> str:
+    """Strip a trailing partial ``STRING_DELIM`` prefix from *value*.
+
+    During streaming, an unterminated string value may end with a
+    partial ``<|"|>`` delimiter (e.g. ``<|"``).  The ``"`` inside
+    would be JSON-escaped as ``\\"``, and the ``\\`` bypasses the
+    safe_json stripping in ``_compute_arg_delta``, corrupting the
+    streamed argument diff.  Stripping it here prevents the leak;
+    the full value arrives on the next delta or final flush.
+    """
+    for suffix in _PARTIAL_DELIM_SUFFIXES:
+        if value.endswith(suffix):
+            return value[: -len(suffix)]
+    return value
+
+
 def _parse_gemma4_args(args_str: str, *, partial: bool = False) -> dict:
     """Parse Gemma4's custom key:value format into a Python dict.
 
@@ -144,8 +165,14 @@ def _parse_gemma4_args(args_str: str, *, partial: bool = False) -> dict:
             val_start = i
             end_pos = args_str.find(STRING_DELIM, i)
             if end_pos == -1:
-                # Unterminated string — take rest
-                result[key] = args_str[val_start:]
+                # Unterminated string — take rest, but strip any
+                # trailing partial STRING_DELIM prefix so it doesn't
+                # leak into the JSON (the " in <|" gets escaped as
+                # \" which bypasses safe_json stripping).
+                value = args_str[val_start:]
+                if partial:
+                    value = _strip_partial_delim(value)
+                result[key] = value
                 break
             result[key] = args_str[val_start:end_pos]
             i = end_pos + len(STRING_DELIM)
