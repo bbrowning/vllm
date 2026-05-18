@@ -191,7 +191,19 @@ class TokenIDScanner:
                 results.append(terminal)
                 remaining = remaining[len(terminal.text) :]
             else:
-                results.append(terminal)
+                # For token_id_text_in_delta=True the text must appear in the
+                # stream; if remaining ends with a proper prefix of the
+                # terminal's text the bytes are still arriving via
+                # SentencePiece holdback — re-defer rather than firing early.
+                if self._token_id_text_in_delta and any(
+                    remaining.endswith(terminal.text[:k])
+                    for k in range(1, len(terminal.text))
+                ):
+                    self._deferred_post_text += remaining
+                    remaining = ""
+                    self._deferred_terminals.append(terminal)
+                else:
+                    results.append(terminal)
 
         return results, remaining
 

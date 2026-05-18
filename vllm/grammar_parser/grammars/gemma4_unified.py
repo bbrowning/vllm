@@ -92,6 +92,14 @@ def gemma4_unified_config() -> GrammarConfig:
                 ParserState.CONTENT,
                 [],
             ),
+            # Absorb a bare <channel|> in content state.  This can occur when
+            # holdback-released bytes reconstruct the token after a premature
+            # THINK_END firing has already transitioned the state machine to
+            # CONTENT.  Silently drop it rather than leaking it as TEXT_CHUNK.
+            (ParserState.CONTENT, "THINK_END"): Transition(
+                ParserState.CONTENT,
+                [],
+            ),
         },
         content_events={
             ParserState.CONTENT: EventType.TEXT_CHUNK,
