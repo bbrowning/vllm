@@ -46,6 +46,7 @@ from vllm.inputs import (
 )
 from vllm.logger import init_logger
 from vllm.parser import ParserManager
+from vllm.parser.abstract_parser import Parser
 from vllm.reasoning.abs_reasoning_parsers import ReasoningParser
 from vllm.renderers import BaseRenderer, merge_kwargs
 from vllm.renderers.inputs.preprocess import (
@@ -100,6 +101,12 @@ class OpenAIServingRender:
             ParserManager.get_reasoning_parser(
                 reasoning_parser_name=reasoning_parser,
             )
+        )
+        self.parser_cls: type[Parser] | None = ParserManager.get_parser(
+            tool_parser_name=tool_parser,
+            reasoning_parser_name=reasoning_parser,
+            enable_auto_tools=enable_auto_tools,
+            model_name=model_config.model,
         )
         self.default_chat_template_kwargs: dict[str, Any] = (
             default_chat_template_kwargs or {}
@@ -605,5 +612,13 @@ class OpenAIServingRender:
                 request = tool_parser(tokenizer, request.tools).adjust_request(
                     request=request
                 )
+
+        if (
+            self.parser_cls is not None
+            and reasoning_parser is None
+            and tool_parser is None
+        ):
+            tokenizer = renderer.get_tokenizer()
+            request = self.parser_cls(tokenizer).adjust_request(request=request)
 
         return conversation, [engine_input]
