@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from vllm.entrypoints.openai.engine.protocol import DeltaMessage
 from vllm.grammar_parser.events import SemanticEvent
+from vllm.grammar_parser.grammars.deepseek_v4_unified import deepseek_v4_unified_config
 from vllm.grammar_parser.grammars.gemma4_unified import gemma4_unified_config
 from vllm.grammar_parser.grammars.hermes import hermes_config
 from vllm.grammar_parser.grammars.qwen3_unified import qwen3_unified_config
@@ -232,3 +233,36 @@ class ThinkTagGrammarParser(GrammarParser):
         **kwargs,
     ) -> None:
         super().__init__(tokenizer, tools, grammar_config=think_tag_config(), **kwargs)
+
+
+class DeepSeekV4GrammarParser(GrammarParser):
+    """Unified DeepSeek V4 parser: ``<think>``/``</think>`` reasoning +
+    DSML tool calls (``<｜DSML｜tool_calls>``/``<｜DSML｜invoke>``) in a
+    single state machine.
+
+    Initial state is CONTENT — the model generates ``<think>`` itself in
+    thinking mode; in chat mode the prompt pre-fills ``</think>`` so the
+    model outputs content directly.
+
+    ``skip_special_tokens=False`` is required so that DSML special tokens
+    appear in ``delta_text`` for text-based lexing.
+    """
+
+    def __init__(
+        self,
+        tokenizer: TokenizerLike,
+        tools: list[Tool] | None = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(
+            tokenizer,
+            tools,
+            grammar_config=deepseek_v4_unified_config(),
+            **kwargs,
+        )
+
+    def adjust_request(
+        self, request: ChatCompletionRequest | ResponsesRequest
+    ) -> ChatCompletionRequest | ResponsesRequest:
+        request.skip_special_tokens = False
+        return request

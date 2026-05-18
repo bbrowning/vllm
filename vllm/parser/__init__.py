@@ -23,6 +23,10 @@ _PARSERS_TO_REGISTER = {
 }
 
 _GRAMMAR_PARSERS_TO_REGISTER = {
+    "deepseek_v4_grammar": (
+        "vllm.grammar_parser.unified_parsers",
+        "DeepSeekV4GrammarParser",
+    ),
     "gemma4_grammar": (
         "vllm.grammar_parser.unified_parsers",
         "Gemma4GrammarParser",
