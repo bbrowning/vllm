@@ -3,9 +3,8 @@
 """Unified grammar configuration for Gemma4: channel-based reasoning
 plus custom tool call format in a single state machine.
 
-Merges ``gemma4_channel_config()`` (reasoning) and ``gemma4_config()``
-(tool calls) so a single :class:`StreamingParserEngine` handles the
-complete model output::
+A single :class:`StreamingParserEngine` handles the complete model
+output::
 
     <|channel>thought
     ...reasoning...<channel|>

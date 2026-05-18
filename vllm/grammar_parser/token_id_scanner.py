@@ -210,15 +210,9 @@ class TokenIDScanner:
         if not results:
             return [TextChunk(delta_text)]
 
-        reconstructed_parts: list[str] = []
-        for item in results:
-            if isinstance(item, TextChunk):
-                reconstructed_parts.append(item.text)
-            elif isinstance(item, PreLexedTerminal):
-                if not isinstance(item.text, str):
-                    return results
-                reconstructed_parts.append(item.text)
-        reconstructed = "".join(reconstructed_parts)
+        reconstructed = self._join_decoded_text(results)
+        if reconstructed is None:
+            return results  # non-string text, return as-is
 
         if not reconstructed:
             return [TextChunk(delta_text)] + results
@@ -229,19 +223,41 @@ class TokenIDScanner:
         if pos == 0:
             return results
 
-        # Exact match failed (SentencePiece context-dependent decoding,
-        # or detokenizer held back the special-token text).  Rebuild
-        # from delta_text using PreLexedTerminals as split anchors.
-        # delta_text is the authoritative source for text content.
-        #
-        # When a terminal's text is NOT in delta_text (the detokenizer
-        # is still holding it back), defer the terminal to the next
-        # scan() call rather than emitting it now — this keeps the
-        # state machine in sync with the actual text stream.
+        # Fallback: SentencePiece context-dependent decoding mismatch.
+        # Rebuild from delta_text using PreLexedTerminals as split anchors.
+        return self._rebuild_from_anchors(delta_text, results)
+
+    def _join_decoded_text(self, results: list[LexerInput]) -> str | None:
+        """Join TextChunk and PreLexedTerminal text into one string.
+
+        Returns ``None`` if any PreLexedTerminal has a non-string text
+        field (indicating unreliable decode).
+        """
+        parts: list[str] = []
+        for item in results:
+            if isinstance(item, TextChunk):
+                parts.append(item.text)
+            elif isinstance(item, PreLexedTerminal):
+                if not isinstance(item.text, str):
+                    return None
+                parts.append(item.text)
+        return "".join(parts)
+
+    def _rebuild_from_anchors(
+        self,
+        delta_text: str,
+        results: list[LexerInput],
+    ) -> list[LexerInput]:
+        """Rebuild results from delta_text using terminals as anchors.
+
+        When a terminal's text is not in delta_text, defer it to the
+        next scan() call (token_id_text_in_delta) or emit immediately
+        with holdback text placed by token order.
+        """
         new_results: list[LexerInput] = []
         remaining = delta_text
         seen_text_before = False
-        for item in results:
+        for i, item in enumerate(results):
             if not isinstance(item, PreLexedTerminal):
                 if isinstance(item, TextChunk) and item.text:
                     seen_text_before = True
@@ -256,25 +272,13 @@ class TokenIDScanner:
                 remaining = remaining[len(item.text) :]
             else:
                 if self._token_id_text_in_delta:
-                    # Text will arrive in a later delta (detokenizer
-                    # holdback, skip_special_tokens=False).  Store
-                    # preceding text so _resolve_deferred can replay
-                    # it contiguously with the arriving terminal text.
                     if remaining:
                         self._deferred_post_text += remaining
                         remaining = ""
                     self._deferred_terminals.append(item)
                 else:
-                    # Text permanently stripped (skip_special_tokens).
-                    # Use token order to determine placement: if text
-                    # tokens preceded this terminal, OR if this is a
-                    # lone terminal with holdback text (no text tokens
-                    # follow), emit remaining text first so text-matched
-                    # terminals (e.g. </function> → FUNC_END) fire
-                    # before this one.
                     has_text_after = not seen_text_before and any(
-                        isinstance(r, TextChunk) and r.text
-                        for r in results[results.index(item) + 1 :]
+                        isinstance(r, TextChunk) and r.text for r in results[i + 1 :]
                     )
                     text_before = remaining and (seen_text_before or not has_text_after)
                     if text_before:

@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Tests for TokenIDScanner, focusing on hold-back text recovery."""
+"""Tests for TokenIDScanner, focusing on hold-back text recovery.
+
+Uses gemma4_unified_config for all end-to-end engine tests, covering
+reasoning channels, tool calls, and combined flows."""
 
 from unittest.mock import MagicMock
 
@@ -394,17 +397,17 @@ class TestDropTokens:
 
 
 class TestEndToEndReasoningHoldback:
-    """End-to-end test through the full parser engine simulating
-    stream-interval > 1 and detokenizer hold-back."""
+    """End-to-end tests through the full parser engine simulating
+    stream-interval > 1 and detokenizer hold-back, using
+    gemma4_unified_config."""
 
     def test_reasoning_content_not_truncated(self):
-        from vllm.grammar_parser.events import EventType
-        from vllm.grammar_parser.grammars.gemma4_channel import (
-            gemma4_channel_config,
+        from vllm.grammar_parser.grammars.gemma4_unified import (
+            gemma4_unified_config,
         )
         from vllm.grammar_parser.parser_engine import StreamingParserEngine
 
-        config = gemma4_channel_config()
+        config = gemma4_unified_config()
         tok = MagicMock()
         vocab = {
             CHANNEL_START: CHANNEL_START_ID,
@@ -464,13 +467,12 @@ class TestEndToEndReasoningHoldback:
 
     def test_backtick_content_not_truncated(self):
         """Reproduces the hostname backtick truncation case."""
-        from vllm.grammar_parser.events import EventType
-        from vllm.grammar_parser.grammars.gemma4_channel import (
-            gemma4_channel_config,
+        from vllm.grammar_parser.grammars.gemma4_unified import (
+            gemma4_unified_config,
         )
         from vllm.grammar_parser.parser_engine import StreamingParserEngine
 
-        config = gemma4_channel_config()
+        config = gemma4_unified_config()
         tok = MagicMock()
         vocab = {
             CHANNEL_START: CHANNEL_START_ID,
@@ -597,112 +599,25 @@ class TestMultiTokenBoundaryPreservation:
     """End-to-end tests verifying no text is lost at state boundaries
     when multiple tokens arrive per delta with detokenizer holdback.
 
-    Tests the Gemma4 grammar parsers (reasoning via gemma4_channel_config,
-    tool calling via gemma4_config) individually and in combination,
-    matching ``--reasoning-parser gemma4_grammar --tool-call-parser
-    gemma4_grammar``."""
+    Uses gemma4_unified_config which covers both reasoning and tool calls
+    in a single engine."""
 
-    # -- Group A: Reasoning engine (gemma4_channel_config) -----------------
+    # -- Unique edge cases from channel-only tests -------------------------
 
-    def test_reasoning_holdback_at_channel_end(self):
-        """Reasoning text held back by detokenizer across <channel|>.
-
-        The CHANNEL_END token arrives in delta_token_ids but its text
-        is NOT in delta_text.  The held-back reasoning text must appear
-        in REASONING_CHUNK events, not be silently dropped."""
-        from vllm.grammar_parser.grammars.gemma4_channel import (
-            gemma4_channel_config,
-        )
-        from vllm.grammar_parser.parser_engine import StreamingParserEngine
-
-        tok = _make_gemma4_tokenizer()
-        engine = StreamingParserEngine(gemma4_channel_config(), tok)
-
-        events = _collect_events(
-            engine,
-            [
-                (_CHANNEL_START_TAG, [_CHANNEL_START_TID]),
-                ("thought\nLet me analyze", [_TOK[0], _TOK[1], _TOK[2]]),
-                # Holdback: " the problem carefully." is flushed from
-                # detokenizer but CHANNEL_END text is still held back.
-                (" the problem carefully.", [_CHANNEL_END_TID]),
-                # Next delta: detokenizer flushes CHANNEL_END text + content.
-                ("<channel|>The answer.", [_TOK[3], _TOK[4]]),
-            ],
-        )
-
-        assert "the problem carefully." in _reasoning_text(events)
-        assert "The answer." in _content_text(events)
-        assert _has_event(events, EventType.REASONING_START)
-        assert _has_event(events, EventType.REASONING_END)
-
-    def test_reasoning_deferred_channel_end_then_content(self):
-        """CHANNEL_END deferred, then resolves with substantial content."""
-        from vllm.grammar_parser.grammars.gemma4_channel import (
-            gemma4_channel_config,
-        )
-        from vllm.grammar_parser.parser_engine import StreamingParserEngine
-
-        tok = _make_gemma4_tokenizer()
-        engine = StreamingParserEngine(gemma4_channel_config(), tok)
-
-        events = _collect_events(
-            engine,
-            [
-                (_CHANNEL_START_TAG, [_CHANNEL_START_TID]),
-                ("thought\nThinking deeply.", [_TOK[0]]),
-                # Holdback + deferred terminal.
-                (" Very deeply.", [_CHANNEL_END_TID]),
-                # Deferred resolves.  Content follows.
-                (
-                    "<channel|>Here is my plan: I will use a tool.",
-                    [_TOK[1], _TOK[2], _TOK[3]],
-                ),
-            ],
-        )
-
-        reasoning = _reasoning_text(events)
-        assert "Thinking deeply. Very deeply." in reasoning
-        assert "Here is my plan: I will use a tool." in _content_text(events)
-        assert _has_event(events, EventType.REASONING_END)
-
-    def test_reasoning_backtick_holdback(self):
-        """Backtick-quoted content held back across CHANNEL_END."""
-        from vllm.grammar_parser.grammars.gemma4_channel import (
-            gemma4_channel_config,
-        )
-        from vllm.grammar_parser.parser_engine import StreamingParserEngine
-
-        tok = _make_gemma4_tokenizer()
-        engine = StreamingParserEngine(gemma4_channel_config(), tok)
-
-        events = _collect_events(
-            engine,
-            [
-                (_CHANNEL_START_TAG, [_CHANNEL_START_TID]),
-                ("thought\nCheck the output of ", [_TOK[0], _TOK[1]]),
-                ("`hostname`.", [_CHANNEL_END_TID]),
-                ("<channel|>Here is the result.", [_TOK[2], _TOK[3]]),
-            ],
-        )
-
-        assert "`hostname`." in _reasoning_text(events)
-        assert "Here is the result." in _content_text(events)
-
-    def test_reasoning_empty_delta_text_at_channel_end(self):
+    def test_empty_delta_text_at_channel_end_unified(self):
         """delta_text="" when CHANNEL_END arrives; text comes later.
 
         When delta_text is empty the PreLexedTerminal fires immediately.
         The tag text then appears in the *next* delta's delta_text and
         may be echoed by the lexer — that is accepted.  The invariant
         we enforce is that no reasoning or content text is *lost*."""
-        from vllm.grammar_parser.grammars.gemma4_channel import (
-            gemma4_channel_config,
+        from vllm.grammar_parser.grammars.gemma4_unified import (
+            gemma4_unified_config,
         )
         from vllm.grammar_parser.parser_engine import StreamingParserEngine
 
         tok = _make_gemma4_tokenizer()
-        engine = StreamingParserEngine(gemma4_channel_config(), tok)
+        engine = StreamingParserEngine(gemma4_unified_config(), tok)
 
         events = _collect_events(
             engine,
@@ -726,15 +641,15 @@ class TestMultiTokenBoundaryPreservation:
         assert _has_event(events, EventType.REASONING_START)
         assert _has_event(events, EventType.REASONING_END)
 
-    def test_reasoning_channel_end_flushed_at_finish(self):
+    def test_deferred_channel_end_flushed_at_finish_unified(self):
         """Deferred CHANNEL_END flushed at end-of-stream via finish()."""
-        from vllm.grammar_parser.grammars.gemma4_channel import (
-            gemma4_channel_config,
+        from vllm.grammar_parser.grammars.gemma4_unified import (
+            gemma4_unified_config,
         )
         from vllm.grammar_parser.parser_engine import StreamingParserEngine
 
         tok = _make_gemma4_tokenizer()
-        engine = StreamingParserEngine(gemma4_channel_config(), tok)
+        engine = StreamingParserEngine(gemma4_unified_config(), tok)
 
         events = _collect_events(
             engine,
@@ -750,72 +665,60 @@ class TestMultiTokenBoundaryPreservation:
         assert "Reasoning text. Final thought." in reasoning
         assert _has_event(events, EventType.REASONING_END)
 
-    # -- Group B: Tool call engine (gemma4_config) -------------------------
+    # -- Cross-engine: reasoning → tool call in single unified engine -----
 
-    def test_tool_call_holdback_at_tool_end(self):
-        """Tool arg text held back across <tool_call|> boundary.
+    def test_reasoning_to_tool_call_handoff_unified(self):
+        """Full reasoning → content → tool call through a single engine.
 
-        The TOOL_END token arrives but its text is NOT in delta_text.
-        Held-back arg text must not be lost."""
-        from vllm.grammar_parser.grammars.gemma4 import gemma4_config
-        from vllm.grammar_parser.parser_engine import StreamingParserEngine
-
-        tok = _make_gemma4_tokenizer()
-        engine = StreamingParserEngine(gemma4_config(), tok)
-
-        events = _collect_events(
-            engine,
-            [
-                (_TOOL_START_TAG, [_TOOL_START_TID]),
-                ("call:get_weather{city:", [_TOK[0], _TOK[1]]),
-                # Holdback: quote-delimited value flushed but TOOL_END text absent.
-                (
-                    '<|"|>Tokyo<|"|>}',
-                    [_QUOTE_TID, _TOK[2], _QUOTE_TID, _TOK[3], _TOOL_END_TID],
-                ),
-                # Detokenizer flushes TOOL_END text.
-                ("<tool_call|>", [_TOK[4]]),
-            ],
+        Verifies the unified config handles the complete flow without
+        needing separate reasoning and tool-call engines."""
+        from vllm.grammar_parser.grammars.gemma4_unified import (
+            gemma4_unified_config,
         )
-
-        assert _has_event(events, EventType.TOOL_CALL_START)
-        assert _has_event(events, EventType.TOOL_CALL_END)
-        args = _arg_text(events)
-        assert "Tokyo" in args
-
-    def test_tool_args_split_across_deltas(self):
-        """Tool arg content split across multiple deltas — no special
-        tokens involved, just regular holdback within TOOL_ARGS state."""
-        from vllm.grammar_parser.grammars.gemma4 import gemma4_config
         from vllm.grammar_parser.parser_engine import StreamingParserEngine
 
         tok = _make_gemma4_tokenizer()
-        engine = StreamingParserEngine(gemma4_config(), tok)
+        engine = StreamingParserEngine(gemma4_unified_config(), tok)
 
         events = _collect_events(
             engine,
             [
+                # Reasoning section
+                (_CHANNEL_START_TAG, [_CHANNEL_START_TID]),
+                ("thought\nI need to check the weather.", [_TOK[0], _TOK[1], _TOK[2]]),
+                (_CHANNEL_END_TAG, [_CHANNEL_END_TID]),
+                # Content + tool call
+                ("Let me call a tool.", [_TOK[3], _TOK[4]]),
                 (_TOOL_START_TAG, [_TOOL_START_TID]),
-                ("call:search{", [_TOK[0], _TOK[1]]),
-                ("query:", [_TOK[2]]),
-                ('<|"|>machine learning', [_QUOTE_TID, _TOK[3]]),
-                (' basics<|"|>}', [_TOK[4], _QUOTE_TID, _TOK[5]]),
+                ("call:get_weather{city:", [_TOK[5], _TOK[6]]),
+                ('<|"|>SF<|"|>}', [_QUOTE_TID, _TOK[7], _QUOTE_TID, _TOK[8]]),
                 (_TOOL_END_TAG, [_TOOL_END_TID]),
             ],
         )
 
-        args = _arg_text(events)
-        assert "machine learning basics" in args
-        assert _has_event(events, EventType.TOOL_CALL_END)
+        reasoning = _reasoning_text(events)
+        content = _content_text(events)
 
-    def test_multiple_tool_calls_rapid_transitions(self):
-        """Two tool calls back-to-back with multi-token deltas.
-        Verifies tool_index tracking and text integrity."""
-        from vllm.grammar_parser.grammars.gemma4 import gemma4_config
+        assert "I need to check the weather." in reasoning
+        assert "Let me call a tool." in content
+        assert _has_event(events, EventType.REASONING_START)
+        assert _has_event(events, EventType.REASONING_END)
+        assert _has_event(events, EventType.TOOL_CALL_START)
+        assert _has_event(events, EventType.TOOL_CALL_END)
+        assert "SF" in _arg_text(events)
+
+    def test_multiple_tool_calls_rapid_transitions_unified(self):
+        """Two back-to-back tool calls in the unified config.
+
+        Verifies tool_index tracking and text integrity — the key behavior
+        lost when test_multiple_tool_calls_rapid_transitions was removed."""
+        from vllm.grammar_parser.grammars.gemma4_unified import (
+            gemma4_unified_config,
+        )
         from vllm.grammar_parser.parser_engine import StreamingParserEngine
 
         tok = _make_gemma4_tokenizer()
-        engine = StreamingParserEngine(gemma4_config(), tok)
+        engine = StreamingParserEngine(gemma4_unified_config(), tok)
 
         events = _collect_events(
             engine,
@@ -844,122 +747,31 @@ class TestMultiTokenBoundaryPreservation:
         assert "get_weather" in names
         assert "get_time" in names
 
-    def test_tool_call_deferred_end_then_content(self):
-        """TOOL_END deferred, resolves next delta with content after."""
-        from vllm.grammar_parser.grammars.gemma4 import gemma4_config
+    def test_deferred_channel_end_before_tool_call_unified(self):
+        """CHANNEL_END deferred (text held back), then tool call follows.
+
+        Covers the case where reasoning ends with holdback at <channel|>
+        and a tool call fires in the same unified engine afterward — the
+        compound scenario from the deleted
+        test_reasoning_to_tool_call_with_deferred_channel_end."""
+        from vllm.grammar_parser.grammars.gemma4_unified import (
+            gemma4_unified_config,
+        )
         from vllm.grammar_parser.parser_engine import StreamingParserEngine
 
         tok = _make_gemma4_tokenizer()
-        engine = StreamingParserEngine(gemma4_config(), tok)
+        engine = StreamingParserEngine(gemma4_unified_config(), tok)
 
         events = _collect_events(
             engine,
             [
-                (_TOOL_START_TAG, [_TOOL_START_TID]),
-                ("call:ping{host:", [_TOK[0], _TOK[1]]),
-                ('<|"|>server<|"|>}', [_QUOTE_TID, _TOK[2], _QUOTE_TID, _TOK[3]]),
-                # Holdback: arg text "}" flushed but TOOL_END text absent.
-                # (The "}" above already included the closing brace so the
-                # holdback here is just remaining text before the tag.)
-                ("remaining", [_TOOL_END_TID]),
-                # Resolves deferred TOOL_END + content.
-                ("<tool_call|>Done.", [_TOK[4], _TOK[5]]),
-            ],
-        )
-
-        assert _has_event(events, EventType.TOOL_CALL_END)
-        assert "Done." in _content_text(events)
-        assert "server" in _arg_text(events)
-
-    # -- Group C: Cross-engine integration (reasoning → tool handoff) ------
-
-    def test_reasoning_to_tool_call_handoff_clean(self):
-        """Full reasoning → content → tool call with clean boundaries.
-
-        Baseline: nothing lost when all terminal texts are present in
-        their respective delta_text."""
-        from vllm.grammar_parser.grammars.gemma4 import gemma4_config
-        from vllm.grammar_parser.grammars.gemma4_channel import (
-            gemma4_channel_config,
-        )
-        from vllm.grammar_parser.parser_engine import StreamingParserEngine
-
-        tok = _make_gemma4_tokenizer()
-
-        # Phase 1: Reasoning engine
-        r_engine = StreamingParserEngine(gemma4_channel_config(), tok)
-        r_events: list = []
-        r_events.extend(r_engine.feed(_CHANNEL_START_TAG, [_CHANNEL_START_TID]))
-        r_events.extend(
-            r_engine.feed(
-                "thought\nI need to check the weather.", [_TOK[0], _TOK[1], _TOK[2]]
-            )
-        )
-        r_events.extend(r_engine.feed(_CHANNEL_END_TAG, [_CHANNEL_END_TID]))
-
-        # Content after reasoning end — reasoning engine sees as TEXT_CHUNK.
-        r_events.extend(r_engine.feed("Let me call a tool.", [_TOK[3], _TOK[4]]))
-        r_events.extend(r_engine.finish())
-
-        reasoning = _reasoning_text(r_events)
-        content_from_reasoning = _content_text(r_events)
-
-        assert "I need to check the weather." in reasoning
-        assert "Let me call a tool." in content_from_reasoning
-
-        # Phase 2: Tool engine receives content + tool call
-        t_engine = StreamingParserEngine(gemma4_config(), tok)
-        t_events = _collect_events(
-            t_engine,
-            [
-                (_TOOL_START_TAG, [_TOOL_START_TID]),
-                ("call:get_weather{city:", [_TOK[5], _TOK[6]]),
-                ('<|"|>SF<|"|>}', [_QUOTE_TID, _TOK[7], _QUOTE_TID, _TOK[8]]),
-                (_TOOL_END_TAG, [_TOOL_END_TID]),
-            ],
-        )
-
-        assert _has_event(t_events, EventType.TOOL_CALL_START)
-        assert _has_event(t_events, EventType.TOOL_CALL_END)
-        assert "SF" in _arg_text(t_events)
-
-    def test_reasoning_to_tool_call_with_deferred_channel_end(self):
-        """CHANNEL_END deferred in reasoning engine, resolves in next
-        delta.  Tool call follows in subsequent deltas.
-
-        This catches the commit 8b11a26 regression: deferred resolution
-        must not prevent the tool call from being processed."""
-        from vllm.grammar_parser.grammars.gemma4 import gemma4_config
-        from vllm.grammar_parser.grammars.gemma4_channel import (
-            gemma4_channel_config,
-        )
-        from vllm.grammar_parser.parser_engine import StreamingParserEngine
-
-        tok = _make_gemma4_tokenizer()
-
-        # Phase 1: Reasoning engine with deferred CHANNEL_END
-        r_engine = StreamingParserEngine(gemma4_channel_config(), tok)
-        r_events: list = []
-        r_events.extend(r_engine.feed(_CHANNEL_START_TAG, [_CHANNEL_START_TID]))
-        r_events.extend(
-            r_engine.feed("thought\nNeed to call a tool.", [_TOK[0], _TOK[1]])
-        )
-        # Holdback: " Let me proceed." is reasoning text, CHANNEL_END
-        # text absent → deferred.
-        r_events.extend(r_engine.feed(" Let me proceed.", [_CHANNEL_END_TID]))
-        # Deferred CHANNEL_END resolves.
-        r_events.extend(r_engine.feed("<channel|>", [_TOK[2]]))
-        r_events.extend(r_engine.finish())
-
-        reasoning = _reasoning_text(r_events)
-        assert "Need to call a tool. Let me proceed." in reasoning
-        assert _has_event(r_events, EventType.REASONING_END)
-
-        # Phase 2: Tool call engine
-        t_engine = StreamingParserEngine(gemma4_config(), tok)
-        t_events = _collect_events(
-            t_engine,
-            [
+                (_CHANNEL_START_TAG, [_CHANNEL_START_TID]),
+                ("thought\nNeed to call a tool.", [_TOK[0], _TOK[1]]),
+                # Holdback: reasoning tail in delta_text, CHANNEL_END text absent.
+                (" Let me proceed.", [_CHANNEL_END_TID]),
+                # Deferred CHANNEL_END resolves.
+                (_CHANNEL_END_TAG, [_TOK[2]]),
+                # Tool call follows
                 (_TOOL_START_TAG, [_TOOL_START_TID]),
                 ("call:get_weather{city:", [_TOK[3], _TOK[4]]),
                 ('<|"|>Tokyo<|"|>}', [_QUOTE_TID, _TOK[5], _QUOTE_TID, _TOK[6]]),
@@ -967,59 +779,12 @@ class TestMultiTokenBoundaryPreservation:
             ],
         )
 
-        assert _has_event(t_events, EventType.TOOL_CALL_START)
-        assert _has_event(t_events, EventType.TOOL_CALL_END)
-        assert "Tokyo" in _arg_text(t_events)
-
-    def test_reasoning_to_tool_call_holdback_at_both_boundaries(self):
-        """Holdback at BOTH <channel|> AND <tool_call|> boundaries.
-
-        Compound test: reasoning engine has deferred CHANNEL_END, tool
-        engine has deferred TOOL_END.  No text lost at either boundary."""
-        from vllm.grammar_parser.grammars.gemma4 import gemma4_config
-        from vllm.grammar_parser.grammars.gemma4_channel import (
-            gemma4_channel_config,
-        )
-        from vllm.grammar_parser.parser_engine import StreamingParserEngine
-
-        tok = _make_gemma4_tokenizer()
-
-        # Phase 1: Reasoning with deferred CHANNEL_END
-        r_engine = StreamingParserEngine(gemma4_channel_config(), tok)
-        r_events: list = []
-        r_events.extend(r_engine.feed(_CHANNEL_START_TAG, [_CHANNEL_START_TID]))
-        r_events.extend(r_engine.feed("thought\nAnalyzing.", [_TOK[0]]))
-        # Holdback + deferred.
-        r_events.extend(r_engine.feed(" Done analyzing.", [_CHANNEL_END_TID]))
-        # Resolves deferred, content follows.
-        r_events.extend(r_engine.feed("<channel|>Result text.", [_TOK[1]]))
-        r_events.extend(r_engine.finish())
-
-        reasoning = _reasoning_text(r_events)
-        content_from_r = _content_text(r_events)
-        assert "Analyzing. Done analyzing." in reasoning
-        assert "Result text." in content_from_r
-
-        # Phase 2: Tool call with deferred TOOL_END
-        t_engine = StreamingParserEngine(gemma4_config(), tok)
-        t_events: list = []
-        t_events.extend(t_engine.feed(_TOOL_START_TAG, [_TOOL_START_TID]))
-        t_events.extend(t_engine.feed("call:search{q:", [_TOK[2], _TOK[3]]))
-        t_events.extend(
-            t_engine.feed(
-                '<|"|>test query<|"|>}',
-                [_QUOTE_TID, _TOK[4], _TOK[5], _QUOTE_TID, _TOK[6]],
-            )
-        )
-        # Holdback arg text, TOOL_END text absent → deferred.
-        t_events.extend(t_engine.feed("trailing", [_TOOL_END_TID]))
-        # Resolves deferred TOOL_END + content.
-        t_events.extend(t_engine.feed("<tool_call|>Final.", [_TOK[7]]))
-        t_events.extend(t_engine.finish())
-
-        assert _has_event(t_events, EventType.TOOL_CALL_END)
-        assert "test query" in _arg_text(t_events)
-        assert "Final." in _content_text(t_events)
+        reasoning = _reasoning_text(events)
+        assert "Need to call a tool. Let me proceed." in reasoning
+        assert _has_event(events, EventType.REASONING_END)
+        assert _has_event(events, EventType.TOOL_CALL_START)
+        assert _has_event(events, EventType.TOOL_CALL_END)
+        assert "Tokyo" in _arg_text(events)
 
 
 class TestStreamInterval10:
@@ -1042,13 +807,13 @@ class TestStreamInterval10:
         delta_text includes all text: holdback from previous batch +
         reasoning text + <channel|> text + content text.  All in one
         feed() call with 10 token IDs."""
-        from vllm.grammar_parser.grammars.gemma4_channel import (
-            gemma4_channel_config,
+        from vllm.grammar_parser.grammars.gemma4_unified import (
+            gemma4_unified_config,
         )
         from vllm.grammar_parser.parser_engine import StreamingParserEngine
 
         tok = _make_gemma4_tokenizer({_TOK[i]: f"word{i} " for i in range(15)})
-        engine = StreamingParserEngine(gemma4_channel_config(), tok)
+        engine = StreamingParserEngine(gemma4_unified_config(), tok)
 
         events: list = []
         # Batch 1: channel start + first reasoning tokens (10 tokens)
@@ -1115,13 +880,13 @@ class TestStreamInterval10:
         is deferred, and tokens after it in the same batch have their
         individually-decoded text dropped (unreliable without
         delta_text confirmation)."""
-        from vllm.grammar_parser.grammars.gemma4_channel import (
-            gemma4_channel_config,
+        from vllm.grammar_parser.grammars.gemma4_unified import (
+            gemma4_unified_config,
         )
         from vllm.grammar_parser.parser_engine import StreamingParserEngine
 
         tok = _make_gemma4_tokenizer({_TOK[i]: f"word{i} " for i in range(15)})
-        engine = StreamingParserEngine(gemma4_channel_config(), tok)
+        engine = StreamingParserEngine(gemma4_unified_config(), tok)
 
         events: list = []
         # Batch 1: channel start + reasoning (10 tokens)
@@ -1188,23 +953,44 @@ class TestStreamInterval10:
 
         assert _has_event(events, EventType.REASONING_END)
 
-    def test_tool_end_mid_batch_text_absent(self):
+    def test_tool_end_mid_batch_text_absent_unified(self):
         """<tool_call|> at position 5 of 10-token batch, text absent.
 
         Same pattern as channel_end but for tool calls — verifies
         arg text isn't lost at tool-call end with large batches."""
-        from vllm.grammar_parser.grammars.gemma4 import gemma4_config
+        from vllm.grammar_parser.grammars.gemma4_unified import (
+            gemma4_unified_config,
+        )
         from vllm.grammar_parser.parser_engine import StreamingParserEngine
 
         tok = _make_gemma4_tokenizer({_TOK[i]: f"w{i}" for i in range(15)})
-        engine = StreamingParserEngine(gemma4_config(), tok)
+        engine = StreamingParserEngine(gemma4_unified_config(), tok)
 
         events: list = []
-        # Batch 1: tool start + call prefix + name + open brace + args
+        # Batch 1: channel start (to enter unified flow) + tool start
         events.extend(
             engine.feed(
-                "<|tool_call>call:get_weather{city:",
-                [_TOOL_START_TID, _TOK[0], _TOK[1], _TOK[2], _TOK[3]],
+                _CHANNEL_START_TAG,
+                [_CHANNEL_START_TID],
+            )
+        )
+        events.extend(
+            engine.feed(
+                "thought\nNeed a tool.",
+                [_TOK[0], _TOK[1]],
+            )
+        )
+        # Reasoning → tool call directly (unified config feature)
+        events.extend(
+            engine.feed(
+                _TOOL_START_TAG,
+                [_TOOL_START_TID],
+            )
+        )
+        events.extend(
+            engine.feed(
+                "call:get_weather{city:",
+                [_TOK[2], _TOK[3], _TOK[4]],
             )
         )
 
@@ -1216,15 +1002,15 @@ class TestStreamInterval10:
                 '<|"|>San Francisco<|"|>}',
                 [
                     _QUOTE_TID,
-                    _TOK[4],
                     _TOK[5],
-                    _QUOTE_TID,
                     _TOK[6],
-                    _TOOL_END_TID,
+                    _QUOTE_TID,
                     _TOK[7],
+                    _TOOL_END_TID,
                     _TOK[8],
                     _TOK[9],
                     _TOK[10],
+                    _TOK[11],
                 ],
             )
         )
@@ -1232,8 +1018,8 @@ class TestStreamInterval10:
         # Batch 3: detokenizer flushes <tool_call|> text + content.
         events.extend(
             engine.feed(
-                "<tool_call|>w7w8w9w10w11w12",
-                [_TOK[11], _TOK[12]],
+                "<tool_call|>w8w9w10w11w12",
+                [_TOK[12], _TOK[13]],
             )
         )
 
@@ -1241,29 +1027,23 @@ class TestStreamInterval10:
 
         assert _has_event(events, EventType.TOOL_CALL_END)
         assert "San Francisco" in _arg_text(events)
-        content = _content_text(events)
-        assert "w7" in content or "w8" in content
 
-    def test_channel_end_and_tool_start_same_batch(self):
-        """Both <channel|> AND <|tool_call> in a single 10-token batch.
-
-        This is the worst case for stream_interval=10: reasoning ends
-        and tool call starts in the same feed() call.  Both terminals
-        and all surrounding text must be processed correctly."""
-        from vllm.grammar_parser.grammars.gemma4_channel import (
-            gemma4_channel_config,
+    def test_channel_end_and_tool_start_same_batch_unified(self):
+        """Both <channel|> AND <|tool_call> in a single 10-token batch,
+        handled by the unified config in one engine."""
+        from vllm.grammar_parser.grammars.gemma4_unified import (
+            gemma4_unified_config,
         )
         from vllm.grammar_parser.parser_engine import StreamingParserEngine
 
         tok = _make_gemma4_tokenizer({_TOK[i]: f"w{i} " for i in range(15)})
+        engine = StreamingParserEngine(gemma4_unified_config(), tok)
 
-        # Reasoning engine sees both <channel|> in the batch
-        r_engine = StreamingParserEngine(gemma4_channel_config(), tok)
-        r_events: list = []
+        events: list = []
 
         # Batch 1: reasoning start + content (10 tokens)
-        r_events.extend(
-            r_engine.feed(
+        events.extend(
+            engine.feed(
                 "<|channel>thought\nw0 w1 w2 w3 w4 w5 w6 w7 w8 ",
                 [
                     _CHANNEL_START_TID,
@@ -1280,36 +1060,33 @@ class TestStreamInterval10:
             )
         )
 
-        # Batch 2: 10 tokens with <channel|> at pos 3.
-        # The reasoning engine doesn't know about <|tool_call> — it
-        # just sees it as regular text after <channel|>.
-        r_events.extend(
-            r_engine.feed(
-                "w9 w10 <channel|>w11 w12 w13 w14 w0 w1 w2 ",
+        # Batch 2: 10 tokens with <channel|> at pos 2, <|tool_call> at pos 4.
+        # Unified engine handles both the reasoning end and tool call start.
+        events.extend(
+            engine.feed(
+                "w9 w10 <channel|>w11 <|tool_call>",
                 [
                     _TOK[9],
                     _TOK[10],
                     _CHANNEL_END_TID,
                     _TOK[11],
+                    _TOOL_START_TID,
                     _TOK[12],
                     _TOK[13],
                     _TOK[14],
                     _TOK[0],
                     _TOK[1],
-                    _TOK[2],
                 ],
             )
         )
-        r_events.extend(r_engine.finish())
+        events.extend(engine.finish())
 
-        reasoning = _reasoning_text(r_events)
-        content_from_r = _content_text(r_events)
+        reasoning = _reasoning_text(events)
 
         assert "w9" in reasoning
         assert "w10" in reasoning
-        assert _has_event(r_events, EventType.REASONING_END)
-        # Content after <channel|> captured by reasoning engine.
-        assert "w11" in content_from_r
+        assert _has_event(events, EventType.REASONING_END)
+        assert _has_event(events, EventType.TOOL_CALL_START)
 
     def test_large_batch_holdback_spans_two_batches(self):
         """Realistic stream_interval=10: reasoning text accumulates
@@ -1320,13 +1097,13 @@ class TestStreamInterval10:
         has been accumulating text across multiple tokens, holds some
         back at the batch boundary, and the special token arrives in
         the next batch with the held-back text in delta_text."""
-        from vllm.grammar_parser.grammars.gemma4_channel import (
-            gemma4_channel_config,
+        from vllm.grammar_parser.grammars.gemma4_unified import (
+            gemma4_unified_config,
         )
         from vllm.grammar_parser.parser_engine import StreamingParserEngine
 
         tok = _make_gemma4_tokenizer({_TOK[i]: f"w{i} " for i in range(15)})
-        engine = StreamingParserEngine(gemma4_channel_config(), tok)
+        engine = StreamingParserEngine(gemma4_unified_config(), tok)
 
         events: list = []
 

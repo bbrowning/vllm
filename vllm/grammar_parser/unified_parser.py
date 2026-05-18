@@ -434,102 +434,21 @@ class GrammarParser(Parser):
         reasoning_parts: list[str] = []
 
         for event in events:
-            if event.type == EventType.TEXT_CHUNK:
-                content_parts.append(event.value)
-
-            elif event.type == EventType.REASONING_CHUNK:
-                reasoning_parts.append(event.value)
-
-            elif event.type == EventType.REASONING_END:
-                self._reasoning_ended = True
-
-            elif event.type == EventType.TOOL_CALL_START:
-                idx = event.tool_index
-                call_id = make_tool_call_id()
-                while len(self._tool_call_ids) <= idx:
-                    self._tool_call_ids.append("")
-                    self._tool_names.append("")
-                    self._tool_args.append("")
-                    self._name_sent.append(False)
-                    self._streamed_json.append("")
-                self._tool_call_ids[idx] = call_id
-
-            elif event.type == EventType.TOOL_NAME:
-                idx = event.tool_index
-                self._tool_names[idx] += event.value
-
-            elif event.type == EventType.ARG_VALUE_CHUNK:
-                idx = event.tool_index
-                if event.value:
-                    self._tool_args[idx] += event.value
-
-                if not self._name_sent[idx] and self._tool_names[idx]:
-                    self._name_sent[idx] = True
-                    tool_call_deltas.append(
-                        DeltaToolCall(
-                            index=idx,
-                            id=self._tool_call_ids[idx],
-                            type="function",
-                            function=DeltaFunctionCall(
-                                name=self._tool_names[idx],
-                            ),
-                        )
-                    )
-                elif not self._name_sent[idx] and event.value:
-                    name = self._try_extract_name(idx)
-                    if name:
-                        self._tool_names[idx] = name
-                        self._name_sent[idx] = True
-                        tool_call_deltas.append(
-                            DeltaToolCall(
-                                index=idx,
-                                id=self._tool_call_ids[idx],
-                                type="function",
-                                function=DeltaFunctionCall(name=name),
-                            )
-                        )
-                elif self._name_sent[idx] and event.value:
-                    arg_delta = self._compute_arg_delta(idx, event.value)
-                    if arg_delta:
-                        tool_call_deltas.append(
-                            DeltaToolCall(
-                                index=idx,
-                                function=DeltaFunctionCall(
-                                    arguments=arg_delta,
-                                ),
-                            )
-                        )
-
-            elif event.type == EventType.TOOL_CALL_END:
-                idx = event.tool_index
-                if idx < len(self._tool_args):
-                    remaining = self._flush_arg_converter(idx)
-                    if not self._name_sent[idx]:
-                        name = self._tool_names[idx] or self._try_extract_name(idx)
-                        if name:
-                            self._tool_names[idx] = name
-                            self._name_sent[idx] = True
-                            tool_call_deltas.append(
-                                DeltaToolCall(
-                                    index=idx,
-                                    id=self._tool_call_ids[idx],
-                                    type="function",
-                                    function=DeltaFunctionCall(
-                                        name=name,
-                                        arguments=remaining or "",
-                                    ),
-                                )
-                            )
-                            remaining = None
-                    if remaining and self._name_sent[idx]:
-                        tool_call_deltas.append(
-                            DeltaToolCall(
-                                index=idx,
-                                function=DeltaFunctionCall(
-                                    arguments=remaining,
-                                ),
-                            )
-                        )
+            match event.type:
+                case EventType.TEXT_CHUNK:
+                    content_parts.append(event.value)
+                case EventType.REASONING_CHUNK:
+                    reasoning_parts.append(event.value)
+                case EventType.REASONING_END:
+                    self._reasoning_ended = True
+                case EventType.TOOL_CALL_START:
+                    self._init_tool_slot(event)
+                case EventType.TOOL_NAME:
+                    self._handle_tool_name(event)
+                case EventType.ARG_VALUE_CHUNK:
+                    self._handle_arg_chunk(event, tool_call_deltas)
+                case EventType.TOOL_CALL_END:
+                    self._handle_tool_end(event, tool_call_deltas)
 
         content = "".join(content_parts) or None
         reasoning = "".join(reasoning_parts) or None
@@ -541,6 +460,111 @@ class GrammarParser(Parser):
                 tool_calls=tool_call_deltas,
             )
         return None
+
+    def _ensure_slot(self, idx: int) -> None:
+        """Ensure per-tool-call lists have room for *idx*."""
+        while len(self._tool_call_ids) <= idx:
+            self._tool_call_ids.append("")
+            self._tool_names.append("")
+            self._tool_args.append("")
+            self._name_sent.append(False)
+            self._streamed_json.append("")
+
+    def _init_tool_slot(self, event: SemanticEvent) -> None:
+        """Initialize a slot for a new tool call."""
+        idx = event.tool_index
+        self._ensure_slot(idx)
+        self._tool_call_ids[idx] = make_tool_call_id()
+
+    def _handle_tool_name(self, event: SemanticEvent) -> None:
+        idx = event.tool_index
+        self._tool_names[idx] += event.value
+
+    def _emit_name_delta(
+        self,
+        idx: int,
+        deltas: list[DeltaToolCall],
+        name: str | None,
+    ) -> None:
+        """Emit a name delta and mark the slot as name-sent."""
+        if not name:
+            return
+        self._tool_names[idx] = name
+        self._name_sent[idx] = True
+        deltas.append(
+            DeltaToolCall(
+                index=idx,
+                id=self._tool_call_ids[idx],
+                type="function",
+                function=DeltaFunctionCall(name=name),
+            )
+        )
+
+    def _handle_arg_chunk(
+        self,
+        event: SemanticEvent,
+        deltas: list[DeltaToolCall],
+    ) -> None:
+        """Accumulate args and emit name/arg deltas as needed."""
+        idx = event.tool_index
+        if event.value:
+            self._tool_args[idx] += event.value
+
+        if not self._name_sent[idx]:
+            if self._tool_names[idx]:
+                self._emit_name_delta(idx, deltas, self._tool_names[idx])
+            elif event.value:
+                # Name not yet known — try to extract from accumulated args
+                name = self._try_extract_name(idx)
+                self._emit_name_delta(idx, deltas, name)
+        elif event.value:
+            # Name already sent — emit arg delta
+            arg_delta = self._compute_arg_delta(idx, event.value)
+            if arg_delta:
+                deltas.append(
+                    DeltaToolCall(
+                        index=idx,
+                        function=DeltaFunctionCall(arguments=arg_delta),
+                    )
+                )
+
+    def _handle_tool_end(
+        self,
+        event: SemanticEvent,
+        deltas: list[DeltaToolCall],
+    ) -> None:
+        """Flush arg converter and emit final delta for completed tool."""
+        idx = event.tool_index
+        if idx >= len(self._tool_args):
+            return
+
+        remaining = self._flush_arg_converter(idx)
+
+        if not self._name_sent[idx]:
+            name = self._tool_names[idx] or self._try_extract_name(idx)
+            if name:
+                self._tool_names[idx] = name
+                self._name_sent[idx] = True
+                deltas.append(
+                    DeltaToolCall(
+                        index=idx,
+                        id=self._tool_call_ids[idx],
+                        type="function",
+                        function=DeltaFunctionCall(
+                            name=name,
+                            arguments=remaining or "",
+                        ),
+                    )
+                )
+                remaining = None
+
+        if remaining and self._name_sent[idx]:
+            deltas.append(
+                DeltaToolCall(
+                    index=idx,
+                    function=DeltaFunctionCall(arguments=remaining),
+                )
+            )
 
     # ── Arg conversion helpers (from GrammarToolParser) ───────────────
 
