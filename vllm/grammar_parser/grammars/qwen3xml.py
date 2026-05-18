@@ -16,7 +16,6 @@ The ``arg_converter`` parses these into a JSON object.
 
 from __future__ import annotations
 
-import ast
 import json
 
 import regex as re
@@ -27,6 +26,7 @@ from vllm.grammar_parser.grammar_config import (
     ParserState,
     Transition,
 )
+from vllm.tool_parsers.utils import safe_literal_eval
 
 TOOL_CALL_START = "<tool_call>"
 TOOL_CALL_END = "</tool_call>"
@@ -66,7 +66,7 @@ def _coerce_value(text: str):
         pass
 
     try:
-        result = ast.literal_eval(stripped)
+        result = safe_literal_eval(stripped)
         return result
     except (ValueError, SyntaxError):
         pass

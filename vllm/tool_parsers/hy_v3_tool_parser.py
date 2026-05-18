@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
-import ast
 import json
 from collections.abc import Sequence
 from typing import Any
@@ -27,6 +26,7 @@ from vllm.tool_parsers.abstract_tool_parser import (
     Tool,
     ToolParser,
 )
+from vllm.tool_parsers.utils import safe_literal_eval
 
 logger = init_logger(__name__)
 
@@ -189,7 +189,7 @@ class HYV3ToolParser(ToolParser):
         except Exception:
             pass
         try:
-            return ast.literal_eval(value)
+            return safe_literal_eval(value)
         except Exception:
             pass
         return value
