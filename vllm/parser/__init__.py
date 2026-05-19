@@ -24,31 +24,31 @@ _PARSERS_TO_REGISTER = {
 
 _GRAMMAR_PARSERS_TO_REGISTER = {
     "deepseek_v4_grammar": (
-        "vllm.grammar_parser.unified_parsers",
+        "vllm.grammar_parser.parsers",
         "DeepSeekV4GrammarParser",
     ),
     "gemma4_grammar": (
-        "vllm.grammar_parser.unified_parsers",
+        "vllm.grammar_parser.parsers",
         "Gemma4GrammarParser",
     ),
     "qwen3_grammar": (
-        "vllm.grammar_parser.unified_parsers",
+        "vllm.grammar_parser.parsers",
         "Qwen3GrammarParser",
     ),
     "hermes_grammar": (
-        "vllm.grammar_parser.unified_parsers",
+        "vllm.grammar_parser.parsers",
         "HermesGrammarParser",
     ),
     "qwen3_xml_grammar": (
-        "vllm.grammar_parser.unified_parsers",
+        "vllm.grammar_parser.parsers",
         "Qwen3XMLGrammarParser",
     ),
     "qwen3_coder_grammar": (
-        "vllm.grammar_parser.unified_parsers",
+        "vllm.grammar_parser.parsers",
         "Qwen3XMLGrammarParser",
     ),
     "think_tag_grammar": (
-        "vllm.grammar_parser.unified_parsers",
+        "vllm.grammar_parser.parsers",
         "ThinkTagGrammarParser",
     ),
 }

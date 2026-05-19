@@ -30,7 +30,7 @@ import regex as re
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from vllm.grammar_parser.grammars.qwen3xml import _qwen3xml_arg_converter
+from vllm.grammar_parser.grammars.qwen3 import _qwen3xml_arg_converter
 
 _FUNC_NAME_RE = re.compile(r"<function=([^>]+)>")
 

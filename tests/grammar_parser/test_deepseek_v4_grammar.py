@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Tests for the unified DeepSeek V4 grammar parser (DSML tool calls + reasoning)."""
+"""Tests for the DeepSeek V4 grammar parser (DSML tool calls + reasoning)."""
 
 import json
 from unittest.mock import MagicMock
@@ -16,7 +16,7 @@ from tests.grammar_parser.streaming_helpers import (
 from vllm.entrypoints.openai.chat_completion.protocol import (
     ChatCompletionRequest,
 )
-from vllm.grammar_parser.grammars.deepseek_v4_unified import (
+from vllm.grammar_parser.grammars.deepseek_v4 import (
     DSML_INVOKE_END,
     DSML_INVOKE_NAME_END,
     DSML_INVOKE_PREFIX,
@@ -25,7 +25,7 @@ from vllm.grammar_parser.grammars.deepseek_v4_unified import (
     DSML_TOOL_CALLS_END,
     DSML_TOOL_CALLS_START,
     _dsml_arg_converter,
-    deepseek_v4_unified_config,
+    deepseek_v4_config,
 )
 from vllm.grammar_parser.unified_parser import GrammarParser
 
@@ -74,7 +74,7 @@ def mock_tokenizer():
 
 @pytest.fixture
 def parser(mock_tokenizer):
-    return GrammarParser(mock_tokenizer, grammar_config=deepseek_v4_unified_config())
+    return GrammarParser(mock_tokenizer, grammar_config=deepseek_v4_config())
 
 
 @pytest.fixture

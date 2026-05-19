@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Registered unified grammar parser classes.
+"""Registered grammar parser classes.
 
-Each class passes a unified ``GrammarConfig`` (covering both reasoning
-and tool calls) to :class:`GrammarParser`, and adds any model-specific
+Each class passes a ``GrammarConfig`` (covering both reasoning and tool
+calls) to :class:`GrammarParser`, and adds any model-specific
 post-processing.
 """
 
@@ -13,11 +13,10 @@ from typing import TYPE_CHECKING
 
 from vllm.entrypoints.openai.engine.protocol import DeltaMessage
 from vllm.grammar_parser.events import SemanticEvent
-from vllm.grammar_parser.grammars.deepseek_v4_unified import deepseek_v4_unified_config
-from vllm.grammar_parser.grammars.gemma4_unified import gemma4_unified_config
+from vllm.grammar_parser.grammars.deepseek_v4 import deepseek_v4_config
+from vllm.grammar_parser.grammars.gemma4 import gemma4_config
 from vllm.grammar_parser.grammars.hermes import hermes_config
-from vllm.grammar_parser.grammars.qwen3_unified import qwen3_unified_config
-from vllm.grammar_parser.grammars.qwen3xml import qwen3xml_config
+from vllm.grammar_parser.grammars.qwen3 import qwen3_config, qwen3xml_config
 from vllm.grammar_parser.grammars.think_tag import think_tag_config
 from vllm.grammar_parser.unified_parser import GrammarParser
 
@@ -33,11 +32,9 @@ _GEMMA4_THOUGHT_PREFIX = "thought\n"
 
 
 class Gemma4GrammarParser(GrammarParser):
-    """Unified Gemma4 parser: ``<|channel>`` reasoning + ``<|tool_call>``
+    """Gemma4 parser: ``<|channel>`` reasoning + ``<|tool_call>``
     tool calls in a single engine.
 
-    Absorbs model-specific logic from the separate
-    ``GrammarGemma4ReasoningParser``:
     - Strips the ``thought\\n`` prefix from reasoning content
     - Sets ``skip_special_tokens=False`` so boundary tokens are visible
     - Detects ``<|tool_call>`` token as implicit reasoning end
@@ -52,7 +49,7 @@ class Gemma4GrammarParser(GrammarParser):
         super().__init__(
             tokenizer,
             tools,
-            grammar_config=gemma4_unified_config(),
+            grammar_config=gemma4_config(),
             **kwargs,
         )
         vocab = self.vocab
@@ -143,11 +140,9 @@ class Gemma4GrammarParser(GrammarParser):
 
 
 class Qwen3GrammarParser(GrammarParser):
-    """Unified Qwen3 parser: ``<think>``/``</think>`` reasoning +
+    """Qwen3 parser: ``<think>``/``</think>`` reasoning +
     ``<tool_call>`` XML tool calls in a single engine.
 
-    Absorbs model-specific logic from the separate
-    ``GrammarQwen3ReasoningParser``:
     - Starts in REASONING state (Qwen3.5+ puts ``<think>`` in prompt)
     - ``<tool_call>`` as implicit reasoning end
     - Unpaired ``<tool_call>`` token ID detection for ``is_reasoning_end``
@@ -162,7 +157,7 @@ class Qwen3GrammarParser(GrammarParser):
         super().__init__(
             tokenizer,
             tools,
-            grammar_config=qwen3_unified_config(),
+            grammar_config=qwen3_config(),
             **kwargs,
         )
         vocab = self.vocab
@@ -187,8 +182,7 @@ class Qwen3GrammarParser(GrammarParser):
 
 
 class HermesGrammarParser(GrammarParser):
-    """Unified Hermes parser: ``<tool_call>``/``</tool_call>`` JSON tool
-    calls."""
+    """Hermes parser: ``<tool_call>``/``</tool_call>`` JSON tool calls."""
 
     def __init__(
         self,
@@ -200,7 +194,7 @@ class HermesGrammarParser(GrammarParser):
 
 
 class Qwen3XMLGrammarParser(GrammarParser):
-    """Unified Qwen3 XML parser: ``<tool_call><function=...>`` tool calls."""
+    """Qwen3 XML parser: ``<tool_call><function=...>`` tool calls."""
 
     def __init__(
         self,
@@ -212,7 +206,7 @@ class Qwen3XMLGrammarParser(GrammarParser):
 
 
 class ThinkTagGrammarParser(GrammarParser):
-    """Unified think-tag reasoning parser: ``<think>``/``</think>``."""
+    """Think-tag reasoning parser: ``<think>``/``</think>``."""
 
     def __init__(
         self,
@@ -224,7 +218,7 @@ class ThinkTagGrammarParser(GrammarParser):
 
 
 class DeepSeekV4GrammarParser(GrammarParser):
-    """Unified DeepSeek V4 parser: ``<think>``/``</think>`` reasoning +
+    """DeepSeek V4 parser: ``<think>``/``</think>`` reasoning +
     DSML tool calls (``<｜DSML｜tool_calls>``/``<｜DSML｜invoke>``) in a
     single state machine.
 
@@ -245,7 +239,7 @@ class DeepSeekV4GrammarParser(GrammarParser):
         super().__init__(
             tokenizer,
             tools,
-            grammar_config=deepseek_v4_unified_config(),
+            grammar_config=deepseek_v4_config(),
             **kwargs,
         )
 

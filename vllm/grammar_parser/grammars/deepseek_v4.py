@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Unified grammar configuration for DeepSeek V4: ``<think>``/``</think>``
+"""Grammar configuration for DeepSeek V4: ``<think>``/``</think>``
 reasoning plus DSML tool calls in a single state machine.
 
 DeepSeek V4 output format::
@@ -92,10 +92,10 @@ def _dsml_arg_converter(raw_args: str, partial: bool) -> str:
     return json.dumps(params, ensure_ascii=False)
 
 
-def deepseek_v4_unified_config() -> GrammarConfig:
-    """Return a unified grammar config for DeepSeek V4 reasoning + tool calls."""
+def deepseek_v4_config() -> GrammarConfig:
+    """Return the grammar config for DeepSeek V4 reasoning + tool calls."""
     return GrammarConfig(
-        name="deepseek_v4_unified",
+        name="deepseek_v4",
         initial_state=ParserState.CONTENT,
         terminals={
             "THINK_START": DSML_THINK_START,

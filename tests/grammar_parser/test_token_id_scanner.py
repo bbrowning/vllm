@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Tests for TokenIDScanner, focusing on hold-back text recovery.
 
-Uses gemma4_unified_config for all end-to-end engine tests, covering
+Uses gemma4_config for all end-to-end engine tests, covering
 reasoning channels, tool calls, and combined flows."""
 
 from unittest.mock import MagicMock
@@ -399,15 +399,15 @@ class TestDropTokens:
 class TestEndToEndReasoningHoldback:
     """End-to-end tests through the full parser engine simulating
     stream-interval > 1 and detokenizer hold-back, using
-    gemma4_unified_config."""
+    gemma4_config."""
 
     def test_reasoning_content_not_truncated(self):
-        from vllm.grammar_parser.grammars.gemma4_unified import (
-            gemma4_unified_config,
+        from vllm.grammar_parser.grammars.gemma4 import (
+            gemma4_config,
         )
         from vllm.grammar_parser.parser_engine import StreamingParserEngine
 
-        config = gemma4_unified_config()
+        config = gemma4_config()
         tok = MagicMock()
         vocab = {
             CHANNEL_START: CHANNEL_START_ID,
@@ -467,12 +467,12 @@ class TestEndToEndReasoningHoldback:
 
     def test_backtick_content_not_truncated(self):
         """Reproduces the hostname backtick truncation case."""
-        from vllm.grammar_parser.grammars.gemma4_unified import (
-            gemma4_unified_config,
+        from vllm.grammar_parser.grammars.gemma4 import (
+            gemma4_config,
         )
         from vllm.grammar_parser.parser_engine import StreamingParserEngine
 
-        config = gemma4_unified_config()
+        config = gemma4_config()
         tok = MagicMock()
         vocab = {
             CHANNEL_START: CHANNEL_START_ID,
@@ -599,7 +599,7 @@ class TestMultiTokenBoundaryPreservation:
     """End-to-end tests verifying no text is lost at state boundaries
     when multiple tokens arrive per delta with detokenizer holdback.
 
-    Uses gemma4_unified_config which covers both reasoning and tool calls
+    Uses gemma4_config which covers both reasoning and tool calls
     in a single engine."""
 
     # -- Unique edge cases from channel-only tests -------------------------
@@ -611,13 +611,13 @@ class TestMultiTokenBoundaryPreservation:
         The tag text then appears in the *next* delta's delta_text and
         may be echoed by the lexer — that is accepted.  The invariant
         we enforce is that no reasoning or content text is *lost*."""
-        from vllm.grammar_parser.grammars.gemma4_unified import (
-            gemma4_unified_config,
+        from vllm.grammar_parser.grammars.gemma4 import (
+            gemma4_config,
         )
         from vllm.grammar_parser.parser_engine import StreamingParserEngine
 
         tok = _make_gemma4_tokenizer()
-        engine = StreamingParserEngine(gemma4_unified_config(), tok)
+        engine = StreamingParserEngine(gemma4_config(), tok)
 
         events = _collect_events(
             engine,
@@ -643,13 +643,13 @@ class TestMultiTokenBoundaryPreservation:
 
     def test_deferred_channel_end_flushed_at_finish_unified(self):
         """Deferred CHANNEL_END flushed at end-of-stream via finish()."""
-        from vllm.grammar_parser.grammars.gemma4_unified import (
-            gemma4_unified_config,
+        from vllm.grammar_parser.grammars.gemma4 import (
+            gemma4_config,
         )
         from vllm.grammar_parser.parser_engine import StreamingParserEngine
 
         tok = _make_gemma4_tokenizer()
-        engine = StreamingParserEngine(gemma4_unified_config(), tok)
+        engine = StreamingParserEngine(gemma4_config(), tok)
 
         events = _collect_events(
             engine,
@@ -672,13 +672,13 @@ class TestMultiTokenBoundaryPreservation:
 
         Verifies the unified config handles the complete flow without
         needing separate reasoning and tool-call engines."""
-        from vllm.grammar_parser.grammars.gemma4_unified import (
-            gemma4_unified_config,
+        from vllm.grammar_parser.grammars.gemma4 import (
+            gemma4_config,
         )
         from vllm.grammar_parser.parser_engine import StreamingParserEngine
 
         tok = _make_gemma4_tokenizer()
-        engine = StreamingParserEngine(gemma4_unified_config(), tok)
+        engine = StreamingParserEngine(gemma4_config(), tok)
 
         events = _collect_events(
             engine,
@@ -712,13 +712,13 @@ class TestMultiTokenBoundaryPreservation:
 
         Verifies tool_index tracking and text integrity — the key behavior
         lost when test_multiple_tool_calls_rapid_transitions was removed."""
-        from vllm.grammar_parser.grammars.gemma4_unified import (
-            gemma4_unified_config,
+        from vllm.grammar_parser.grammars.gemma4 import (
+            gemma4_config,
         )
         from vllm.grammar_parser.parser_engine import StreamingParserEngine
 
         tok = _make_gemma4_tokenizer()
-        engine = StreamingParserEngine(gemma4_unified_config(), tok)
+        engine = StreamingParserEngine(gemma4_config(), tok)
 
         events = _collect_events(
             engine,
@@ -754,13 +754,13 @@ class TestMultiTokenBoundaryPreservation:
         and a tool call fires in the same unified engine afterward — the
         compound scenario from the deleted
         test_reasoning_to_tool_call_with_deferred_channel_end."""
-        from vllm.grammar_parser.grammars.gemma4_unified import (
-            gemma4_unified_config,
+        from vllm.grammar_parser.grammars.gemma4 import (
+            gemma4_config,
         )
         from vllm.grammar_parser.parser_engine import StreamingParserEngine
 
         tok = _make_gemma4_tokenizer()
-        engine = StreamingParserEngine(gemma4_unified_config(), tok)
+        engine = StreamingParserEngine(gemma4_config(), tok)
 
         events = _collect_events(
             engine,
@@ -807,13 +807,13 @@ class TestStreamInterval10:
         delta_text includes all text: holdback from previous batch +
         reasoning text + <channel|> text + content text.  All in one
         feed() call with 10 token IDs."""
-        from vllm.grammar_parser.grammars.gemma4_unified import (
-            gemma4_unified_config,
+        from vllm.grammar_parser.grammars.gemma4 import (
+            gemma4_config,
         )
         from vllm.grammar_parser.parser_engine import StreamingParserEngine
 
         tok = _make_gemma4_tokenizer({_TOK[i]: f"word{i} " for i in range(15)})
-        engine = StreamingParserEngine(gemma4_unified_config(), tok)
+        engine = StreamingParserEngine(gemma4_config(), tok)
 
         events: list = []
         # Batch 1: channel start + first reasoning tokens (10 tokens)
@@ -880,13 +880,13 @@ class TestStreamInterval10:
         is deferred, and tokens after it in the same batch have their
         individually-decoded text dropped (unreliable without
         delta_text confirmation)."""
-        from vllm.grammar_parser.grammars.gemma4_unified import (
-            gemma4_unified_config,
+        from vllm.grammar_parser.grammars.gemma4 import (
+            gemma4_config,
         )
         from vllm.grammar_parser.parser_engine import StreamingParserEngine
 
         tok = _make_gemma4_tokenizer({_TOK[i]: f"word{i} " for i in range(15)})
-        engine = StreamingParserEngine(gemma4_unified_config(), tok)
+        engine = StreamingParserEngine(gemma4_config(), tok)
 
         events: list = []
         # Batch 1: channel start + reasoning (10 tokens)
@@ -958,13 +958,13 @@ class TestStreamInterval10:
 
         Same pattern as channel_end but for tool calls — verifies
         arg text isn't lost at tool-call end with large batches."""
-        from vllm.grammar_parser.grammars.gemma4_unified import (
-            gemma4_unified_config,
+        from vllm.grammar_parser.grammars.gemma4 import (
+            gemma4_config,
         )
         from vllm.grammar_parser.parser_engine import StreamingParserEngine
 
         tok = _make_gemma4_tokenizer({_TOK[i]: f"w{i}" for i in range(15)})
-        engine = StreamingParserEngine(gemma4_unified_config(), tok)
+        engine = StreamingParserEngine(gemma4_config(), tok)
 
         events: list = []
         # Batch 1: channel start (to enter unified flow) + tool start
@@ -1031,13 +1031,13 @@ class TestStreamInterval10:
     def test_channel_end_and_tool_start_same_batch_unified(self):
         """Both <channel|> AND <|tool_call> in a single 10-token batch,
         handled by the unified config in one engine."""
-        from vllm.grammar_parser.grammars.gemma4_unified import (
-            gemma4_unified_config,
+        from vllm.grammar_parser.grammars.gemma4 import (
+            gemma4_config,
         )
         from vllm.grammar_parser.parser_engine import StreamingParserEngine
 
         tok = _make_gemma4_tokenizer({_TOK[i]: f"w{i} " for i in range(15)})
-        engine = StreamingParserEngine(gemma4_unified_config(), tok)
+        engine = StreamingParserEngine(gemma4_config(), tok)
 
         events: list = []
 
@@ -1097,13 +1097,13 @@ class TestStreamInterval10:
         has been accumulating text across multiple tokens, holds some
         back at the batch boundary, and the special token arrives in
         the next batch with the held-back text in delta_text."""
-        from vllm.grammar_parser.grammars.gemma4_unified import (
-            gemma4_unified_config,
+        from vllm.grammar_parser.grammars.gemma4 import (
+            gemma4_config,
         )
         from vllm.grammar_parser.parser_engine import StreamingParserEngine
 
         tok = _make_gemma4_tokenizer({_TOK[i]: f"w{i} " for i in range(15)})
-        engine = StreamingParserEngine(gemma4_unified_config(), tok)
+        engine = StreamingParserEngine(gemma4_config(), tok)
 
         events: list = []
 

@@ -18,7 +18,7 @@ from tests.grammar_parser.replay_harness import (
     make_mock_tokenizer,
     replay_streaming,
 )
-from vllm.grammar_parser.unified_parsers import (
+from vllm.grammar_parser.parsers import (
     Gemma4GrammarParser,
     Qwen3GrammarParser,
 )

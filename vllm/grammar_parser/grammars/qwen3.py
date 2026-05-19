@@ -1,8 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Grammar configuration for Qwen3 XML tool call format.
+"""Qwen3 grammar configurations for tool calls and reasoning.
 
-Qwen3 XML format::
+Two configs are provided:
+
+* ``qwen3xml_config()`` — tool calls only (XML ``<tool_call>`` format)
+* ``qwen3_config()`` — reasoning (``<think>``/``</think>``) **plus**
+  tool calls in a single state machine.  Starts in REASONING state
+  because Qwen3.5+ chat templates place ``<think>`` in the prompt.
+
+Qwen3 XML tool call format::
 
     <tool_call>
     <function=func_name>
@@ -11,7 +18,7 @@ Qwen3 XML format::
     </tool_call>
 
 The argument body consists of ``<parameter=NAME>VALUE</parameter>`` tags.
-The ``arg_converter`` parses these into a JSON object.
+The ``_qwen3xml_arg_converter`` parses these into a JSON object.
 """
 
 from __future__ import annotations
@@ -96,7 +103,7 @@ def _qwen3xml_arg_converter(raw_args: str, partial: bool) -> str:
 
 
 def qwen3xml_config() -> GrammarConfig:
-    """Return the grammar config for Qwen3 XML tool calls."""
+    """Return the grammar config for Qwen3 XML tool calls (no reasoning)."""
     return GrammarConfig(
         name="qwen3xml",
         terminals={
@@ -134,6 +141,77 @@ def qwen3xml_config() -> GrammarConfig:
         },
         content_events={
             ParserState.CONTENT: EventType.TEXT_CHUNK,
+            ParserState.TOOL_NAME: EventType.TOOL_NAME,
+            ParserState.TOOL_ARGS: EventType.ARG_VALUE_CHUNK,
+        },
+        arg_converter=_qwen3xml_arg_converter,
+        strip_trailing_quotes=False,
+        tool_args_json=False,
+    )
+
+
+def qwen3_config() -> GrammarConfig:
+    """Return the grammar config for Qwen3 reasoning + tool calls."""
+    return GrammarConfig(
+        name="qwen3",
+        initial_state=ParserState.REASONING,
+        terminals={
+            # Reasoning terminals
+            "THINK_START": "<think>",
+            "THINK_END": "</think>",
+            # Tool call terminals
+            "TOOL_START": TOOL_CALL_START,
+            "TOOL_END": TOOL_CALL_END,
+            "FUNC_PREFIX": FUNC_PREFIX,
+            "FUNC_END": FUNC_END,
+            "CLOSE_ANGLE": ">",
+        },
+        token_id_terminals={
+            "THINK_START": "<think>",
+            "THINK_END": "</think>",
+            "TOOL_START": TOOL_CALL_START,
+            "TOOL_END": TOOL_CALL_END,
+        },
+        transitions={
+            # -- Reasoning transitions --
+            (ParserState.REASONING, "THINK_START"): Transition(
+                ParserState.REASONING,
+                [],
+            ),
+            (ParserState.REASONING, "THINK_END"): Transition(
+                ParserState.CONTENT,
+                [EventType.REASONING_END],
+            ),
+            # Tool call directly from reasoning (implicit end)
+            (ParserState.REASONING, "TOOL_START"): Transition(
+                ParserState.TOOL_PREAMBLE,
+                [EventType.REASONING_END, EventType.TOOL_CALL_START],
+            ),
+            # -- Tool call transitions --
+            (ParserState.CONTENT, "TOOL_START"): Transition(
+                ParserState.TOOL_PREAMBLE,
+                [EventType.TOOL_CALL_START],
+            ),
+            (ParserState.TOOL_PREAMBLE, "FUNC_PREFIX"): Transition(
+                ParserState.TOOL_NAME,
+                [],
+            ),
+            (ParserState.TOOL_NAME, "CLOSE_ANGLE"): Transition(
+                ParserState.TOOL_ARGS,
+                [],
+            ),
+            (ParserState.TOOL_ARGS, "FUNC_END"): Transition(
+                ParserState.TOOL_BETWEEN,
+                [EventType.TOOL_CALL_END],
+            ),
+            (ParserState.TOOL_BETWEEN, "TOOL_END"): Transition(
+                ParserState.CONTENT,
+                [],
+            ),
+        },
+        content_events={
+            ParserState.CONTENT: EventType.TEXT_CHUNK,
+            ParserState.REASONING: EventType.REASONING_CHUNK,
             ParserState.TOOL_NAME: EventType.TOOL_NAME,
             ParserState.TOOL_ARGS: EventType.ARG_VALUE_CHUNK,
         },

@@ -22,7 +22,7 @@ from tests.grammar_parser.streaming_helpers import (
 from vllm.entrypoints.openai.chat_completion.protocol import (
     ChatCompletionRequest,
 )
-from vllm.grammar_parser.grammars.qwen3xml import (
+from vllm.grammar_parser.grammars.qwen3 import (
     TOOL_CALL_END,
     TOOL_CALL_START,
     qwen3xml_config,
