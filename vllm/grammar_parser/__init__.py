@@ -15,6 +15,7 @@ from vllm.grammar_parser.parsers import (
     DeepSeekV4GrammarParser,
     Gemma4GrammarParser,
     HermesGrammarParser,
+    NemotronV3GrammarParser,
     Qwen3GrammarParser,
     Qwen3XMLGrammarParser,
 )
@@ -24,6 +25,7 @@ __all__ = [
     "EventType",
     "Gemma4GrammarParser",
     "HermesGrammarParser",
+    "NemotronV3GrammarParser",
     "Qwen3GrammarParser",
     "Qwen3XMLGrammarParser",
     "SemanticEvent",

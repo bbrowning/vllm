@@ -31,7 +31,7 @@ from vllm.entrypoints.openai.engine.protocol import (
     ToolCall,
 )
 from vllm.grammar_parser.events import EventType, SemanticEvent
-from vllm.grammar_parser.grammar_config import GrammarConfig
+from vllm.grammar_parser.grammar_config import GrammarConfig, ParserState
 from vllm.grammar_parser.parser_engine import StreamingParserEngine
 from vllm.logger import init_logger
 from vllm.parser.abstract_parser import Parser, StreamState
@@ -114,11 +114,12 @@ class GrammarParser(Parser):
 
     # ── Engine lifecycle ──────────────────────────────────────────────
 
-    def _reset(self) -> None:
+    def _reset(self, initial_state: ParserState | None = None) -> None:
         self.flush_capture()
         self._engine = StreamingParserEngine(
             self.grammar_config,
             self.model_tokenizer,
+            initial_state=initial_state,
         )
         self._reasoning_ended = False
         self._tool_call_ids.clear()
@@ -289,6 +290,24 @@ class GrammarParser(Parser):
             delta_token_ids=[],
             request=request,
         )
+        finish_events = self._engine.finish()
+        finish_delta = self._events_to_delta(finish_events) if finish_events else None
+        return self._build_extracted_result(result, finish_delta)
+
+    def extract_tool_calls_from_content(
+        self,
+        content: str,
+        request: ChatCompletionRequest,
+    ) -> ExtractedToolCallInformation:
+        """Extract tool calls from reasoning-stripped content.
+
+        Unlike :meth:`extract_tool_calls` which re-parses the full model
+        output, this method starts the grammar engine in ``CONTENT`` state
+        so it can parse content that has already had reasoning stripped.
+        """
+        self._reset(initial_state=ParserState.CONTENT)
+        events = self._engine.feed(content, [])
+        result = self._events_to_delta(events)
         finish_events = self._engine.finish()
         finish_delta = self._events_to_delta(finish_events) if finish_events else None
         return self._build_extracted_result(result, finish_delta)

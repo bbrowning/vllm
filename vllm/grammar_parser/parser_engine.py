@@ -53,9 +53,12 @@ class StreamingParserEngine:
         self,
         config: GrammarConfig,
         tokenizer,
+        initial_state: ParserState | None = None,
     ) -> None:
         self.config = config
-        self.state = config.initial_state
+        self.state = (
+            initial_state if initial_state is not None else config.initial_state
+        )
         self.tool_index = -1
 
         resolved_token_ids: dict[int, str] = {}

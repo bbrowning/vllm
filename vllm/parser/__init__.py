@@ -47,6 +47,10 @@ _GRAMMAR_PARSERS_TO_REGISTER = {
         "vllm.grammar_parser.parsers",
         "Qwen3XMLGrammarParser",
     ),
+    "nemotron_v3_grammar": (
+        "vllm.grammar_parser.parsers",
+        "NemotronV3GrammarParser",
+    ),
 }
 
 _ADAPTER_MODULE = "vllm.grammar_parser.registered_adapters"

@@ -16,6 +16,7 @@ from vllm.grammar_parser.events import SemanticEvent
 from vllm.grammar_parser.grammars.deepseek_v4 import deepseek_v4_config
 from vllm.grammar_parser.grammars.gemma4 import gemma4_config
 from vllm.grammar_parser.grammars.hermes import hermes_config
+from vllm.grammar_parser.grammars.nemotron_v3 import nemotron_v3_config
 from vllm.grammar_parser.grammars.qwen3 import qwen3_config, qwen3xml_config
 from vllm.grammar_parser.unified_parser import GrammarParser
 
@@ -58,8 +59,8 @@ class Gemma4GrammarParser(GrammarParser):
         self._reasoning_text: str = ""
         self._prefix_stripped: bool = False
 
-    def _reset(self) -> None:
-        super()._reset()
+    def _reset(self, initial_state=None) -> None:
+        super()._reset(initial_state=initial_state)
         self._reasoning_text = ""
         self._prefix_stripped = False
 
@@ -178,6 +179,68 @@ class Qwen3GrammarParser(GrammarParser):
                         continue
                     return True
         return False
+
+
+class NemotronV3GrammarParser(GrammarParser):
+    """Nemotron V3 parser: ``<think>``/``</think>`` reasoning +
+    ``<tool_call>`` XML tool calls, identical format to Qwen3.
+
+    Adds Nemotron-specific behavior: when ``enable_thinking=False`` or
+    ``force_nonempty_content=True`` and content is empty, swaps
+    reasoning and content.
+    """
+
+    def __init__(
+        self,
+        tokenizer: TokenizerLike,
+        tools: list[Tool] | None = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(
+            tokenizer,
+            tools,
+            grammar_config=nemotron_v3_config(),
+            **kwargs,
+        )
+        vocab = self.vocab
+        self._tool_call_token_id: int | None = vocab.get("<tool_call>")
+        self._tool_call_end_token_id: int | None = vocab.get("</tool_call>")
+
+    def is_reasoning_end(self, input_ids: list[int]) -> bool:
+        if super().is_reasoning_end(input_ids):
+            return True
+        tool_call_id = self._tool_call_token_id
+        tool_call_end_id = self._tool_call_end_token_id
+        if tool_call_id is not None:
+            for i in range(len(input_ids) - 1, -1, -1):
+                if input_ids[i] == tool_call_id:
+                    if tool_call_end_id is not None and any(
+                        input_ids[j] == tool_call_end_id
+                        for j in range(i + 1, len(input_ids))
+                    ):
+                        continue
+                    return True
+        return False
+
+    def extract_reasoning(
+        self,
+        model_output: str,
+        request: ChatCompletionRequest | ResponsesRequest,
+    ) -> tuple[str | None, str | None]:
+        reasoning, content = super().extract_reasoning(model_output, request)
+        chat_template_kwargs = getattr(request, "chat_template_kwargs", None)
+
+        if (
+            chat_template_kwargs
+            and (
+                chat_template_kwargs.get("enable_thinking") is False
+                or chat_template_kwargs.get("force_nonempty_content") is True
+            )
+            and (content is None or not content.strip())
+        ):
+            reasoning, content = content, reasoning
+
+        return reasoning, content
 
 
 class HermesGrammarParser(GrammarParser):
