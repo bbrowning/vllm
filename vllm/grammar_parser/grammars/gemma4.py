@@ -9,11 +9,17 @@ state machine::
     ...reasoning...<channel|>
     <|tool_call>call:func_name{key:<|"|>value<|"|>,num:42}<tool_call|>
 
-The ``GEMMA4_DROP_TOKENS`` set lists special tokens that should be silently
-dropped by the scanner.  When ``skip_special_tokens=False`` (required so the
-grammar parser can see boundary tokens), all special tokens become visible.
-Each grammar config subtracts the terminals it actually uses before passing
-the set to :pyattr:`GrammarConfig.drop_tokens`.
+Gemma4 requires ``skip_special_tokens=False`` because its arg format uses
+``<|"|>`` (a special token) as a string delimiter.  The side-effect is that
+*all* special tokens become visible in ``delta_text``, including ones the
+parser doesn't use.  The model actively generates some of these (e.g.
+``<turn|>`` after content, ``<|tool_response>`` after tool calls — see replay
+test cases 005/006), so they must be explicitly dropped to prevent leaking
+into response content.
+
+``_GEMMA4_MODEL_DROP_TOKENS`` lists the Gemma4-specific tokens to drop.
+Universal structural tokens (``<eos>``, ``<bos>``, etc.) are handled
+separately via :data:`~.grammar_config.STRUCTURAL_DROP_TOKENS`.
 """
 
 from __future__ import annotations
@@ -30,20 +36,14 @@ from vllm.tool_parsers.gemma4_tool_parser import (
     _parse_gemma4_args,
 )
 
-GEMMA4_DROP_TOKENS: set[str] = {
-    # Structural
-    "<eos>",
-    "<bos>",
-    "<pad>",
-    "<unk>",
-    "<mask>",
-    # Turn boundaries
+_GEMMA4_MODEL_DROP_TOKENS: set[str] = {
+    # Turn boundaries (model generates <turn|> after content — test case 006)
     "<|turn>",
     "<turn|>",
     # Channel / reasoning
     "<|channel>",
     "<channel|>",
-    # Tool calling
+    # Tool protocol tokens (model generates <|tool_response> — test case 005)
     "<|tool>",
     "<tool|>",
     "<|tool_call>",
@@ -53,7 +53,7 @@ GEMMA4_DROP_TOKENS: set[str] = {
     '<|"|>',
     # Thinking
     "<|think|>",
-    # Multi-modal
+    # Multi-modal (defensive — not expected during text completion)
     "<|image>",
     "<|image|>",
     "<image|>",
@@ -166,6 +166,6 @@ def gemma4_config() -> GrammarConfig:
         arg_converter=_gemma4_arg_converter,
         tool_args_json=False,
         arg_structural_chars=frozenset(",:{}[]<"),
-        drop_tokens=GEMMA4_DROP_TOKENS - used_tokens,
+        drop_tokens=_GEMMA4_MODEL_DROP_TOKENS - used_tokens,
         token_id_text_in_delta=True,
     )

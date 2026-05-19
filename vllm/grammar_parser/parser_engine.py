@@ -8,7 +8,12 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from vllm.grammar_parser.events import EventType, SemanticEvent
-from vllm.grammar_parser.grammar_config import GrammarConfig, ParserState, Transition
+from vllm.grammar_parser.grammar_config import (
+    STRUCTURAL_DROP_TOKENS,
+    GrammarConfig,
+    ParserState,
+    Transition,
+)
 from vllm.grammar_parser.incremental_lexer import (
     IncrementalLexer,
     LexToken,
@@ -62,7 +67,10 @@ class StreamingParserEngine:
                     tid = vocab.get(token_text)
                     if tid is not None:
                         resolved_token_ids[tid] = terminal_name
-            for token_text in config.drop_tokens:
+            all_drop = config.drop_tokens | (
+                STRUCTURAL_DROP_TOKENS if config.drop_tokens else set()
+            )
+            for token_text in all_drop:
                 tid = vocab.get(token_text)
                 if tid is not None:
                     drop_token_ids.add(tid)

@@ -24,6 +24,16 @@ from enum import Enum, auto
 
 from vllm.grammar_parser.events import EventType
 
+STRUCTURAL_DROP_TOKENS: frozenset[str] = frozenset(
+    {
+        "<eos>",
+        "<bos>",
+        "<pad>",
+        "<unk>",
+        "<mask>",
+    }
+)
+
 
 class ParserState(Enum):
     """States for the streaming parser state machine."""
