@@ -122,6 +122,9 @@ FULL_TOKEN_SEQUENCE.append(TOOL_BODY_TOKENS[15])  # }
 # <tool_call|>
 FULL_TOKEN_SEQUENCE.append((TOOL_CALL_END_ID, "<tool_call|>"))
 
+# Full model output as a single string (used by non-streaming tests)
+FULL_MODEL_OUTPUT = "".join(text for _, text in FULL_TOKEN_SEQUENCE)
+
 # Build a complete token-id-to-text map for the mock tokenizer
 _TOKEN_DECODE_MAP: dict[int, str] = {}
 for tid, text in FULL_TOKEN_SEQUENCE:
@@ -854,3 +857,74 @@ class TestStreamingToolCallEdgeCases:
         }
 
         assert args_text.count("replace_all") == 1
+
+
+# ── Non-streaming reasoning + tool call extraction tests ──────────
+
+
+class TestNonStreamingReasoningPlusToolCalls:
+    """Non-streaming extraction with reasoning + tool calls.
+
+    Reproduces the bug where the non-streaming serving path calls
+    extract_reasoning() (which consumes tool call text via the state
+    machine but only returns TEXT_CHUNK content) and then passes the
+    resulting empty content to extract_tool_calls(), finding nothing.
+
+    The fix ensures extract_tool_calls() receives the full model output
+    so the state machine can parse it independently.
+    """
+
+    def test_extract_tool_calls_from_full_text(self, parser, request_obj):
+        """extract_tool_calls on full model output must find tools."""
+        model_output = FULL_MODEL_OUTPUT
+        result = parser.extract_tool_calls(model_output, request_obj)
+
+        assert result.tools_called is True
+        assert len(result.tool_calls) == 1
+        assert result.tool_calls[0].function.name == "get_current_weather"
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args["city"] == "Dallas"
+        assert args["state"] == "TX"
+        assert args["unit"] == "fahrenheit"
+
+    def test_extract_reasoning_from_full_text(self, parser, request_obj):
+        """extract_reasoning on full model output must find reasoning."""
+        model_output = FULL_MODEL_OUTPUT
+        reasoning, content = parser.extract_reasoning(model_output, request_obj)
+
+        assert reasoning is not None
+        assert "weather" in reasoning.lower()
+        assert not reasoning.startswith("thought")
+
+    def test_bug_report_scenario(self, tool_call_parser, mock_request):
+        """Exact scenario from the bug report: get_weather for Raleigh."""
+        model_output = (
+            "<|channel>thought\n"
+            'The user wants to get the weather for "Raleigh". '
+            "I should use the `get_weather` tool and pass "
+            '"Raleigh" as the `city` argument.'
+            "<channel|>"
+            '<|tool_call>call:get_weather{city:<|"|>Raleigh<|"|>}'
+            "<tool_call|>"
+        )
+        result = tool_call_parser.extract_tool_calls(model_output, mock_request)
+
+        assert result.tools_called is True, (
+            f"No tool calls found. content={result.content!r}"
+        )
+        assert result.tool_calls[0].function.name == "get_weather"
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args["city"] == "Raleigh"
+
+    def test_both_extractions_independent(self, parser, request_obj):
+        """Calling extract_reasoning then extract_tool_calls on the same
+        parser instance should both work (each resets the engine)."""
+        model_output = FULL_MODEL_OUTPUT
+
+        reasoning, _ = parser.extract_reasoning(model_output, request_obj)
+        result = parser.extract_tool_calls(model_output, request_obj)
+
+        assert reasoning is not None
+        assert "weather" in reasoning.lower()
+        assert result.tools_called is True
+        assert result.tool_calls[0].function.name == "get_current_weather"
