@@ -2,6 +2,8 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Tests for the streaming parser engine core pipeline."""
 
+from unittest.mock import MagicMock
+
 from vllm.grammar_parser.events import EventType, SemanticEvent
 from vllm.grammar_parser.grammar_config import (
     GrammarConfig,
@@ -254,3 +256,59 @@ class TestStreaming:
             e.value for e in events2 if e.type == EventType.ARG_VALUE_CHUNK
         )
         assert "}" in arg_text2, "} should flush on end tag"
+
+
+_START_ID = 50
+_END_ID = 51
+
+
+def _make_think_tokenizer():
+    tok = MagicMock()
+    tok.encode.return_value = [1, 2, 3]
+    tok.get_vocab.return_value = {"<think>": _START_ID, "</think>": _END_ID}
+    tok.decode.side_effect = lambda ids: {
+        _START_ID: "<think>",
+        _END_ID: "</think>",
+    }.get(ids[0], f"tok{ids[0]}")
+    return tok
+
+
+class TestLexerBufferFlush:
+    """Lexer buffer must be flushed before PreLexedTerminal transitions."""
+
+    def test_buffered_prefix_emitted_in_current_state(self):
+        """Text buffered by the lexer (e.g. '<') must be emitted as
+        REASONING_CHUNK before THINK_END transitions to CONTENT."""
+        engine = StreamingParserEngine(_think_config(), _make_think_tokenizer())
+
+        events = engine.feed("<think>", [_START_ID])
+        assert any(e.type == EventType.REASONING_START for e in events)
+
+        events = engine.feed("reasoning text<", [])
+        reasoning_text = "".join(
+            e.value for e in events if e.type == EventType.REASONING_CHUNK
+        )
+        assert "reasoning text" in reasoning_text
+
+        events = engine.feed("</think>", [_END_ID])
+        event_types = [e.type for e in events]
+        if EventType.REASONING_CHUNK in event_types:
+            rc_idx = event_types.index(EventType.REASONING_CHUNK)
+            re_idx = event_types.index(EventType.REASONING_END)
+            assert rc_idx < re_idx, (
+                "'<' must be emitted as REASONING_CHUNK before REASONING_END"
+            )
+            flushed = events[rc_idx].value
+            assert "<" in flushed
+
+    def test_empty_buffer_no_extra_events(self):
+        """When the lexer buffer is empty, flushing is a no-op."""
+        engine = StreamingParserEngine(_think_config(), _make_think_tokenizer())
+
+        engine.feed("<think>", [_START_ID])
+        engine.feed("clean text", [])
+
+        events = engine.feed("</think>", [_END_ID])
+        assert any(e.type == EventType.REASONING_END for e in events)
+        chunk_events = [e for e in events if e.type == EventType.REASONING_CHUNK]
+        assert all(e.value for e in chunk_events)

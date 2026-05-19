@@ -17,7 +17,6 @@ from vllm.grammar_parser.grammars.deepseek_v4 import deepseek_v4_config
 from vllm.grammar_parser.grammars.gemma4 import gemma4_config
 from vllm.grammar_parser.grammars.hermes import hermes_config
 from vllm.grammar_parser.grammars.qwen3 import qwen3_config, qwen3xml_config
-from vllm.grammar_parser.grammars.think_tag import think_tag_config
 from vllm.grammar_parser.unified_parser import GrammarParser
 
 if TYPE_CHECKING:
@@ -203,18 +202,6 @@ class Qwen3XMLGrammarParser(GrammarParser):
         **kwargs,
     ) -> None:
         super().__init__(tokenizer, tools, grammar_config=qwen3xml_config(), **kwargs)
-
-
-class ThinkTagGrammarParser(GrammarParser):
-    """Think-tag reasoning parser: ``<think>``/``</think>``."""
-
-    def __init__(
-        self,
-        tokenizer: TokenizerLike,
-        tools: list[Tool] | None = None,
-        **kwargs,
-    ) -> None:
-        super().__init__(tokenizer, tools, grammar_config=think_tag_config(), **kwargs)
 
 
 class DeepSeekV4GrammarParser(GrammarParser):

@@ -47,10 +47,6 @@ _GRAMMAR_PARSERS_TO_REGISTER = {
         "vllm.grammar_parser.parsers",
         "Qwen3XMLGrammarParser",
     ),
-    "think_tag_grammar": (
-        "vllm.grammar_parser.parsers",
-        "ThinkTagGrammarParser",
-    ),
 }
 
 

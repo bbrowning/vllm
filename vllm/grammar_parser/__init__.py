@@ -17,7 +17,6 @@ from vllm.grammar_parser.parsers import (
     HermesGrammarParser,
     Qwen3GrammarParser,
     Qwen3XMLGrammarParser,
-    ThinkTagGrammarParser,
 )
 
 __all__ = [
@@ -28,5 +27,4 @@ __all__ = [
     "Qwen3GrammarParser",
     "Qwen3XMLGrammarParser",
     "SemanticEvent",
-    "ThinkTagGrammarParser",
 ]
