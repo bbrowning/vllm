@@ -522,6 +522,7 @@ class AnthropicServingMessages(OpenAIServingChat):
                     self.block_signature: str | None = None
                     self.signature_emitted: bool = False
                     self.tool_use_id: str | None = None
+                    self.pending_content: list[str] = []
 
                 def reset(self) -> None:
                     self.block_type = None
@@ -593,6 +594,23 @@ class AnthropicServingMessages(OpenAIServingChat):
                 state.start(block)
                 return event
 
+            def stop_and_flush() -> list[str]:
+                events = stop_active_block()
+                if not state.pending_content:
+                    return events
+                text = "".join(state.pending_content)
+                state.pending_content.clear()
+                events.append(start_block(AnthropicContentBlock(type="text", text="")))
+                pc_chunk = AnthropicStreamEvent(
+                    index=state.block_index,
+                    type="content_block_delta",
+                    delta=AnthropicDelta(type="text_delta", text=text),
+                )
+                pc_data = pc_chunk.model_dump_json(exclude_unset=True)
+                events.append(wrap_data_with_event(pc_data, "content_block_delta"))
+                events.extend(stop_active_block())
+                return events
+
             async for item in generator:
                 if item.startswith("data:"):
                     data_str = item[5:].strip().rstrip("\n")
@@ -633,7 +651,7 @@ class AnthropicServingMessages(OpenAIServingChat):
 
                         # last chunk including usage info
                         if len(origin_chunk.choices) == 0:
-                            for event in stop_active_block():
+                            for event in stop_and_flush():
                                 yield event
                             stop_reason = self.stop_reason_map.get(
                                 finish_reason or "stop"
@@ -665,7 +683,7 @@ class AnthropicServingMessages(OpenAIServingChat):
                                 pass
                             else:
                                 if state.block_type != "thinking":
-                                    for event in stop_active_block():
+                                    for event in stop_and_flush():
                                         yield event
                                     start_event = start_block(
                                         AnthropicContentBlock(
@@ -691,9 +709,13 @@ class AnthropicServingMessages(OpenAIServingChat):
                         if origin_chunk.choices[0].delta.content is not None:
                             if origin_chunk.choices[0].delta.content == "":
                                 pass
+                            elif state.block_type == "tool_use":
+                                state.pending_content.append(
+                                    origin_chunk.choices[0].delta.content
+                                )
                             else:
                                 if state.block_type != "text":
-                                    for event in stop_active_block():
+                                    for event in stop_and_flush():
                                         yield event
                                     start_event = start_block(
                                         AnthropicContentBlock(type="text", text="")
@@ -731,7 +753,7 @@ class AnthropicServingMessages(OpenAIServingChat):
                                         state.tool_use_id != tool_call.id
                                         and tool_name is not None
                                     ):
-                                        for event in stop_active_block():
+                                        for event in stop_and_flush():
                                             yield event
                                         start_event = start_block(
                                             AnthropicContentBlock(
