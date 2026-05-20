@@ -174,7 +174,7 @@ class TestQwen3ReplayWithHoldback:
 
 
 class TestGrammarParserAdjustRequest:
-    """Verify GrammarParser base class sets skip_special_tokens=False."""
+    """Verify GrammarParser and its adapters set skip_special_tokens=False."""
 
     def test_adjust_request_disables_skip_special_tokens(self):
         sample = _gemma4_samples[0]
@@ -186,6 +186,37 @@ class TestGrammarParserAdjustRequest:
         )
         assert request.skip_special_tokens is True
         adjusted = parser.adjust_request(request)
+        assert adjusted.skip_special_tokens is False
+
+    @pytest.mark.parametrize(
+        "adapter_base",
+        [
+            pytest.param("GrammarReasoningAdapter", id="reasoning"),
+            pytest.param("GrammarToolAdapter", id="tool"),
+        ],
+    )
+    def test_adapter_delegates_adjust_request(self, adapter_base):
+        """Adapters must delegate adjust_request so that
+        skip_special_tokens=False reaches the detokenizer even when the
+        serving code only calls the adapter (not the unified parser)."""
+        import vllm.grammar_parser.adapters as adapters_mod
+
+        base_cls = getattr(adapters_mod, adapter_base)
+        sample = _nemotron_v3_samples[0]
+        tokenizer = make_mock_tokenizer(sample)
+
+        adapter_cls = type(
+            f"Test{adapter_base}",
+            (base_cls,),
+            {"_grammar_cls": NemotronV3GrammarParser},
+        )
+        adapter = adapter_cls(tokenizer)
+        request = ChatCompletionRequest(
+            model="test-model",
+            messages=[{"role": "user", "content": "test"}],
+        )
+        assert request.skip_special_tokens is True
+        adjusted = adapter.adjust_request(request)
         assert adjusted.skip_special_tokens is False
 
 

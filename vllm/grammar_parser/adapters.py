@@ -106,6 +106,12 @@ class GrammarReasoningAdapter(ReasoningParser):
     def reasoning_end_str(self) -> str | None:
         return self._grammar.reasoning_end_str
 
+    def adjust_request(
+        self,
+        request: ChatCompletionRequest | ResponsesRequest,
+    ) -> ChatCompletionRequest | ResponsesRequest:
+        return self._grammar.adjust_request(request)
+
     def has_reasoning_ended(self) -> bool | None:
         return self._grammar._reasoning_ended
 
@@ -130,6 +136,12 @@ class GrammarToolAdapter(ToolParser):
     ) -> None:
         super().__init__(tokenizer, tools)
         self._grammar = self._grammar_cls(tokenizer, tools)  # type: ignore[call-arg]
+
+    def adjust_request(
+        self,
+        request: ChatCompletionRequest | ResponsesRequest,
+    ) -> ChatCompletionRequest | ResponsesRequest:
+        return self._grammar.adjust_request(request)
 
     def extract_tool_calls(
         self,

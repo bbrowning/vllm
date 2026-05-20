@@ -852,6 +852,52 @@ async def test_serving_chat_parser_adjust_request_sets_skip_special_tokens():
 
 
 @pytest.mark.asyncio
+async def test_serving_chat_reasoning_parser_adjust_request():
+    """When a reasoning_parser adapter delegates adjust_request to the
+    underlying grammar parser, skip_special_tokens=False must reach
+    SamplingParams even though parser_cls is also set."""
+    mock_engine = MagicMock(spec=AsyncLLM)
+    mock_engine.errored = False
+    mock_engine.model_config = MockModelConfig()
+    mock_engine.input_processor = MagicMock()
+    mock_engine.renderer = _build_renderer(mock_engine.model_config)
+
+    serving_chat = _build_serving_chat(mock_engine)
+
+    class _StubReasoningParser:
+        def __init__(self, tokenizer, *args, **kwargs):
+            pass
+
+        def adjust_request(self, request):
+            request.skip_special_tokens = False
+            return request
+
+        def is_reasoning_end(self, token_ids):
+            return True
+
+    serving_chat.reasoning_parser_cls = _StubReasoningParser
+
+    req = ChatCompletionRequest(
+        model=MODEL_NAME,
+        messages=[{"role": "user", "content": "hello"}],
+    )
+    assert req.skip_special_tokens is True
+
+    with suppress(Exception):
+        await serving_chat.create_chat_completion(req)
+
+    assert mock_engine.generate.call_args is not None, (
+        "engine.generate() was never reached — "
+        "adjust_request must run before any code that fails"
+    )
+    sampling_params = mock_engine.generate.call_args.args[1]
+    assert sampling_params.skip_special_tokens is False, (
+        "reasoning_parser.adjust_request() must propagate "
+        "skip_special_tokens=False to SamplingParams"
+    )
+
+
+@pytest.mark.asyncio
 async def test_serving_chat_truncate_prompt_tokens_max_token_accounting():
     """When truncate_prompt_tokens is set, max_tokens must be calculated using
     the truncated prompt length, not the original prompt length.
