@@ -133,9 +133,15 @@ class TokenIDScanner:
                 results = self._recover_holdback_text(effective_text, results)
         else:
             # No detokenizer text to validate against — individually-decoded
-            # TextChunks are unreliable (context-dependent decoding).  Keep
-            # only PreLexedTerminals; the text will arrive in a later delta.
-            results = [r for r in results if isinstance(r, PreLexedTerminal)]
+            # TextChunks are unreliable (context-dependent decoding).
+            # Defer PreLexedTerminals so the state machine doesn't
+            # transition before the preceding text has arrived.  The
+            # deferred terminals will be resolved against the actual
+            # delta_text in a subsequent scan() or flushed by finish().
+            for r in results:
+                if isinstance(r, PreLexedTerminal):
+                    self._deferred_terminals.append(r)
+            results = []
 
         return prefix_items + results
 

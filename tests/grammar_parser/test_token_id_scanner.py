@@ -100,20 +100,23 @@ class TestHoldbackTextRecovery:
         assert result[0].terminal == "THINK_END"
 
     def test_empty_delta_text(self, scanner):
-        """delta_text is empty — no text to lose, terminal emits now."""
+        """delta_text is empty — terminal deferred until text arrives."""
         result = scanner.scan(
             delta_text="",
             delta_token_ids=[CHANNEL_END_ID],
         )
 
-        assert len(result) == 1
-        assert isinstance(result[0], PreLexedTerminal)
-        assert result[0].terminal == "THINK_END"
+        assert len(result) == 0
+
+        flushed = scanner.flush_pending()
+        assert len(flushed) == 1
+        assert isinstance(flushed[0], PreLexedTerminal)
+        assert flushed[0].terminal == "THINK_END"
 
     def test_empty_delta_text_drops_individual_decode_text(self, tokenizer):
-        """delta_text="" with multiple tokens including special: only
-        PreLexedTerminals are emitted — individually-decoded TextChunks
-        are dropped since the detokenizer hasn't confirmed them yet."""
+        """delta_text="" with multiple tokens including special: all
+        results deferred — individually-decoded TextChunks are unreliable
+        and PreLexedTerminals wait for text confirmation."""
         tool_start_id = 400
         tok_a = 201
         tok_b = 202
@@ -133,9 +136,12 @@ class TestHoldbackTextRecovery:
             delta_token_ids=[tool_start_id, tok_a, tok_b],
         )
 
-        assert len(result) == 1
-        assert isinstance(result[0], PreLexedTerminal)
-        assert result[0].terminal == "TOOL_START"
+        assert len(result) == 0
+
+        flushed = scanner.flush_pending()
+        assert len(flushed) == 1
+        assert isinstance(flushed[0], PreLexedTerminal)
+        assert flushed[0].terminal == "TOOL_START"
 
     def test_holdback_before_start_tag(self, scanner):
         """Hold-back text before a reasoning start tag."""
