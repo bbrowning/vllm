@@ -148,10 +148,10 @@ class Qwen3GrammarParser(GrammarParser):
         tools: list[Tool] | None = None,
         **kwargs,
     ) -> None:
+        kwargs.setdefault("grammar_config", qwen3_config())
         super().__init__(
             tokenizer,
             tools,
-            grammar_config=qwen3_config(),
             **kwargs,
         )
         vocab = self.vocab
@@ -175,11 +175,9 @@ class Qwen3GrammarParser(GrammarParser):
         return False
 
 
-class NemotronV3GrammarParser(GrammarParser):
-    """Nemotron V3 parser: ``<think>``/``</think>`` reasoning +
-    ``<tool_call>`` XML tool calls, identical format to Qwen3.
-
-    Adds Nemotron-specific behavior: when ``enable_thinking=False`` or
+class NemotronV3GrammarParser(Qwen3GrammarParser):
+    """Nemotron V3 parser: same format as Qwen3, with Nemotron-specific
+    behavior: when ``enable_thinking=False`` or
     ``force_nonempty_content=True`` and content is empty, swaps
     reasoning and content.
     """
@@ -196,25 +194,6 @@ class NemotronV3GrammarParser(GrammarParser):
             grammar_config=nemotron_v3_config(),
             **kwargs,
         )
-        vocab = self.vocab
-        self._tool_call_token_id: int | None = vocab.get("<tool_call>")
-        self._tool_call_end_token_id: int | None = vocab.get("</tool_call>")
-
-    def is_reasoning_end(self, input_ids: list[int]) -> bool:
-        if super().is_reasoning_end(input_ids):
-            return True
-        tool_call_id = self._tool_call_token_id
-        tool_call_end_id = self._tool_call_end_token_id
-        if tool_call_id is not None:
-            for i in range(len(input_ids) - 1, -1, -1):
-                if input_ids[i] == tool_call_id:
-                    if tool_call_end_id is not None and any(
-                        input_ids[j] == tool_call_end_id
-                        for j in range(i + 1, len(input_ids))
-                    ):
-                        continue
-                    return True
-        return False
 
     def extract_reasoning(
         self,
