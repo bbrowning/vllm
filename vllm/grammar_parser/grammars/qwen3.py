@@ -40,8 +40,10 @@ TOOL_CALL_END = "</tool_call>"
 FUNC_PREFIX = "<function="
 FUNC_END = "</function>"
 
-_PARAM_RE = re.compile(r"<parameter=([^>]*)>(.*?)</parameter>", re.DOTALL)
-_PARTIAL_PARAM_RE = re.compile(r"<parameter=([^>]+)>([^<]*)$", re.DOTALL)
+_PARAM_RE = re.compile(
+    r"<\s*parameter\s*=\s*([^>]*)>(.*?)<\s*/\s*parameter\s*>", re.DOTALL
+)
+_PARTIAL_PARAM_RE = re.compile(r"<\s*parameter\s*=\s*([^>]+)>([^<]*)$", re.DOTALL)
 
 
 def _coerce_value(text: str):

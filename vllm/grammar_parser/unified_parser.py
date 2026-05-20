@@ -183,11 +183,14 @@ class GrammarParser(Parser):
         delta_token_ids: list[int],
         request: ChatCompletionRequest | ResponsesRequest,
         prompt_token_ids: list[int] | None = None,
+        finished: bool = False,
     ) -> DeltaMessage | None:
         if self._capture_tokens is not None:
             for tid in delta_token_ids:
                 self._capture_tokens.append([tid, ""])
         events = self._engine.feed(delta_text, delta_token_ids)
+        if finished:
+            events.extend(self._engine.finish())
         return self._events_to_delta(events)
 
     def flush_capture(self) -> None:

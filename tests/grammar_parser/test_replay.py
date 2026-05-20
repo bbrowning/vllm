@@ -9,6 +9,8 @@ must produce identical output regardless of how tokens are batched.
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from tests.grammar_parser.replay_harness import (
@@ -17,6 +19,9 @@ from tests.grammar_parser.replay_harness import (
     load_samples,
     make_mock_tokenizer,
     replay_streaming,
+)
+from vllm.entrypoints.openai.chat_completion.protocol import (
+    ChatCompletionRequest,
 )
 from vllm.grammar_parser.parsers import (
     Gemma4GrammarParser,
@@ -172,10 +177,6 @@ class TestGrammarParserAdjustRequest:
     """Verify GrammarParser base class sets skip_special_tokens=False."""
 
     def test_adjust_request_disables_skip_special_tokens(self):
-        from vllm.entrypoints.openai.chat_completion.protocol import (
-            ChatCompletionRequest,
-        )
-
         sample = _gemma4_samples[0]
         tokenizer = make_mock_tokenizer(sample)
         parser = Gemma4GrammarParser(tokenizer)
@@ -222,3 +223,60 @@ class TestNemotronV3Replay:
                 f"{terminal!r} leaked into reasoning"
             )
             assert terminal not in output.content, f"{terminal!r} leaked into content"
+
+
+class TestNemotronV3DeferralFinish:
+    """Test that parse_delta(finished=True) resolves deferred scanner state.
+
+    Simulates the production failure where delta_text is missing the
+    </tool_call> text but delta_token_ids has the token, causing the
+    scanner to defer it. Without finish(), the deferred state is lost
+    and tool call arguments are empty.
+    """
+
+    @pytest.mark.parametrize("sample", _nemotron_v3_samples, ids=lambda s: s.id)
+    def test_misaligned_last_delta_with_finish(self, sample):
+        """Tool args must be parsed even when last delta has text/token mismatch."""
+        if not sample.expected_tool_calls:
+            pytest.skip("no tool calls in sample")
+
+        tokenizer = make_mock_tokenizer(sample)
+        parser = NemotronV3GrammarParser(tokenizer)
+
+        request = ChatCompletionRequest(
+            model="test-model",
+            messages=[{"role": "user", "content": "test"}],
+        )
+
+        all_ids = [tid for tid, _ in sample.tokens]
+        all_texts = [text for _, text in sample.tokens]
+
+        tool_end_id = sample.vocab.get("</tool_call>")
+        split_idx = None
+        for i in range(len(all_ids) - 1, -1, -1):
+            if all_ids[i] == tool_end_id:
+                split_idx = i
+                break
+
+        if split_idx is None:
+            pytest.skip("no </tool_call> token found")
+
+        first_ids = all_ids[:split_idx]
+        first_text = "".join(all_texts[:split_idx])
+
+        last_ids = all_ids[split_idx:]
+        last_text_missing = "".join(all_texts[split_idx:]).replace("</tool_call>", "")
+
+        result1 = parser.parse_delta(
+            first_text, first_ids, request, prompt_token_ids=[]
+        )
+        result2 = parser.parse_delta(
+            last_text_missing, last_ids, request, finished=True
+        )
+
+        output = collect_output([result1, result2])
+
+        tool_calls_only = dataclasses.replace(
+            sample, expected_reasoning=None, expected_content=None
+        )
+        assert_parse_output(output, tool_calls_only)
