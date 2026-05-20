@@ -129,6 +129,12 @@ class GrammarParser(Parser):
         self._streamed_json.clear()
         self._stream_state = StreamState()
 
+    def adjust_request(
+        self, request: ChatCompletionRequest | ResponsesRequest
+    ) -> ChatCompletionRequest | ResponsesRequest:
+        request.skip_special_tokens = False
+        return request
+
     # ── Schema-aware type correction ─────────────────────────────────
 
     def _fix_arg_types(self, args_json: str, func_name: str) -> str:

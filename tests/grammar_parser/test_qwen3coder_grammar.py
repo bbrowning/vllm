@@ -17,7 +17,6 @@ from tests.grammar_parser.streaming_helpers import (
     collect_function_name,
     collect_tool_arguments,
     simulate_tool_streaming,
-    simulate_tool_streaming_with_ids,
 )
 from vllm.entrypoints.openai.chat_completion.protocol import (
     ChatCompletionRequest,
@@ -413,107 +412,6 @@ class TestStreaming:
             "</tool_call>",
         ]
         results = simulate_tool_streaming(parser, mock_request, chunks)
-
-        names = []
-        for delta, _ in results:
-            if delta and delta.tool_calls:
-                for tc in delta.tool_calls:
-                    if tc.function and tc.function.name:
-                        names.append(tc.function.name)
-
-        assert "Bash" in names
-        assert "Read" in names
-
-
-class TestStreamingWithSpecialTokenIDs:
-    """Tests simulating skip_special_tokens=True stripping <tool_call>."""
-
-    @pytest.fixture
-    def special_tokenizer(self):
-        special_tokens = {TOOL_CALL_START: 100, TOOL_CALL_END: 101}
-        reverse = {v: k for k, v in special_tokens.items()}
-        tokenizer = MagicMock()
-        tokenizer.encode.return_value = [1, 2, 3]
-        tokenizer.get_vocab.return_value = special_tokens
-        tokenizer.decode.side_effect = lambda ids: "".join(
-            reverse.get(i, chr(i) if i < 128 else f"<{i}>") for i in ids
-        )
-        return tokenizer
-
-    @pytest.fixture
-    def parser(self, special_tokenizer):
-        return GrammarParser(
-            special_tokenizer,
-            grammar_config=qwen3xml_config(),
-        )
-
-    def test_deferred_tool_call_with_function_in_same_delta(self, parser, mock_request):
-        """<tool_call> token ID present but text stripped."""
-        deltas = [
-            ("\n<function=get_weather>\n", [100, 1, 2, 3, 4]),
-            ("<parameter=city>Tokyo</parameter>\n", [5, 6, 7, 8]),
-            ("</function>\n", [9, 10]),
-            ("", [101]),
-        ]
-        results = simulate_tool_streaming_with_ids(parser, mock_request, deltas)
-
-        name = collect_function_name(results)
-        assert name == "get_weather"
-
-        args_text = collect_tool_arguments(results)
-        assert args_text
-        parsed = json.loads(args_text)
-        assert parsed == {"city": "Tokyo"}
-
-    def test_deferred_tool_call_multiline_params(self, parser, mock_request):
-        """<tool_call> stripped + multi-line params — full bug scenario."""
-        deltas = [
-            (
-                "\n<function=Bash>\n<parameter=command>\n",
-                [100, 1, 2, 3, 4, 5],
-            ),
-            (
-                "find /workspace -name '*.py' | head -20\n</parameter>\n",
-                [6, 7, 8, 9, 10],
-            ),
-            (
-                "<parameter=description>\nFind Python files\n</parameter>\n",
-                [11, 12, 13, 14, 15],
-            ),
-            ("</function>\n", [16, 17]),
-            ("", [101]),
-        ]
-        results = simulate_tool_streaming_with_ids(parser, mock_request, deltas)
-
-        name = collect_function_name(results)
-        assert name == "Bash"
-
-        args_text = collect_tool_arguments(results)
-        assert args_text
-        parsed = json.loads(args_text)
-        assert "find /workspace" in parsed["command"]
-        assert "Find Python files" in parsed["description"]
-
-    def test_holdback_with_stripped_tool_end_two_calls(self, parser, mock_request):
-        """Two parallel tool calls where </tool_call> is stripped and
-        detokenizer hold-back text arrives in the same delta.
-
-        Reproduces the bug where the second tool call's parameters are
-        silently dropped because </tool_call> fires before </function>
-        is lexed."""
-        deltas = [
-            ("\n<function=Bash>\n", [100, 1, 2, 3]),
-            ("<parameter=command>\necho hi\n</parameter>\n", [4, 5, 6, 7]),
-            ("</function>\n", [8, 9, 101, 10]),
-            ("\n<function=Read>\n", [100, 11, 12, 13]),
-            (
-                "<parameter=file_path>\n/workspace/main.py\n</parameter>\n",
-                [14, 15, 16, 17],
-            ),
-            ("</function>\n", [18, 19]),
-            ("", [101]),
-        ]
-        results = simulate_tool_streaming_with_ids(parser, mock_request, deltas)
 
         names = []
         for delta, _ in results:

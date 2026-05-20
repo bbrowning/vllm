@@ -70,9 +70,7 @@ class StreamingParserEngine:
                     tid = vocab.get(token_text)
                     if tid is not None:
                         resolved_token_ids[tid] = terminal_name
-            all_drop = config.drop_tokens | (
-                STRUCTURAL_DROP_TOKENS if config.drop_tokens else set()
-            )
+            all_drop = config.drop_tokens | STRUCTURAL_DROP_TOKENS
             for token_text in all_drop:
                 tid = vocab.get(token_text)
                 if tid is not None:
@@ -82,7 +80,6 @@ class StreamingParserEngine:
             resolved_token_ids,
             tokenizer,
             drop_token_ids,
-            token_id_text_in_delta=config.token_id_text_in_delta,
         )
 
         terminal_defs = terminals_from_literals(config.terminals)

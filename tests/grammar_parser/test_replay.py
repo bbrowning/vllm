@@ -168,8 +168,8 @@ class TestQwen3ReplayWithHoldback:
         assert_parse_output(output, sample)
 
 
-class TestGemma4AdjustRequest:
-    """Verify Gemma4GrammarParser.adjust_request sets skip_special_tokens."""
+class TestGrammarParserAdjustRequest:
+    """Verify GrammarParser base class sets skip_special_tokens=False."""
 
     def test_adjust_request_disables_skip_special_tokens(self):
         from vllm.entrypoints.openai.chat_completion.protocol import (
@@ -186,32 +186,6 @@ class TestGemma4AdjustRequest:
         assert request.skip_special_tokens is True
         adjusted = parser.adjust_request(request)
         assert adjusted.skip_special_tokens is False
-
-    def test_thought_prefix_leaks_without_adjust_request(self):
-        """Without adjust_request (skip_special_tokens=True), thought\\n
-        leaks into content. This documents the failure mode that the
-        server-side fix (calling adjust_request) prevents.
-
-        Uses chunk_size=3 to match the original stream-interval=3 capture.
-        """
-        samples = [s for s in _gemma4_samples if "thought-prefix-leak" in s.id]
-        if not samples:
-            pytest.skip("sample 006 not found")
-        sample = samples[0]
-        special_ids = set(sample.vocab.values())
-        tokenizer = make_mock_tokenizer(sample)
-        parser = Gemma4GrammarParser(tokenizer)
-        deltas = replay_streaming(
-            parser,
-            sample.tokens,
-            chunk_size=3,
-            special_token_ids=special_ids,
-        )
-        output = collect_output(deltas)
-        assert "thought" in output.content, (
-            "Expected 'thought' to leak into content without adjust_request, "
-            "but parser handled it correctly — update this test"
-        )
 
 
 _NEMOTRON_V3_TERMINALS = [
@@ -233,20 +207,6 @@ class TestNemotronV3Replay:
         tokenizer = make_mock_tokenizer(sample)
         parser = NemotronV3GrammarParser(tokenizer)
         deltas = replay_streaming(parser, sample.tokens, chunk_size=chunk_size)
-        output = collect_output(deltas)
-        assert_parse_output(output, sample)
-
-    def test_parse_output_skip_special(self, sample, chunk_size):
-        """Simulate skip_special_tokens=True (the default for Nemotron V3)."""
-        special_ids = set(sample.vocab.values())
-        tokenizer = make_mock_tokenizer(sample)
-        parser = NemotronV3GrammarParser(tokenizer)
-        deltas = replay_streaming(
-            parser,
-            sample.tokens,
-            chunk_size=chunk_size,
-            special_token_ids=special_ids,
-        )
         output = collect_output(deltas)
         assert_parse_output(output, sample)
 

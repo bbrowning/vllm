@@ -96,6 +96,4 @@ class GrammarConfig:
 
     arg_structural_chars: frozenset[str] | None = None
 
-    token_id_text_in_delta: bool = False
-
     drop_tokens: set[str] = field(default_factory=set)

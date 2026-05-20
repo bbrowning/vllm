@@ -109,7 +109,6 @@ def replay_streaming(
     tokens: list[tuple[int, str]],
     chunk_size: int | None = None,
     holdback_chars: int = 0,
-    special_token_ids: set[int] | None = None,
 ) -> list[DeltaMessage | None]:
     """Feed tokens through ``parser.parse_delta()`` at a given chunk size.
 
@@ -119,9 +118,6 @@ def replay_streaming(
         chunk_size: Number of tokens per batch. ``None`` means all at once.
         holdback_chars: Simulate detokenizer holdback by holding back
             this many characters of decoded text between batches.
-        special_token_ids: When provided, simulate ``skip_special_tokens=True``
-            by excluding text from these token IDs in ``delta_text`` while
-            still including the IDs in ``delta_token_ids``.
 
     Returns:
         List of ``DeltaMessage`` results from each ``parse_delta()`` call.
@@ -137,7 +133,6 @@ def replay_streaming(
     results: list[DeltaMessage | None] = []
     all_ids = [tid for tid, _ in tokens]
     all_texts = [text for _, text in tokens]
-    _skip = special_token_ids or set()
 
     request = ChatCompletionRequest(
         model="test-model",
@@ -148,11 +143,7 @@ def replay_streaming(
         for start in range(0, len(tokens), chunk_size):
             batch_end = min(start + chunk_size, len(tokens))
             batch_ids = all_ids[start:batch_end]
-            delta_text = "".join(
-                t
-                for i, t in enumerate(all_texts[start:batch_end])
-                if all_ids[start + i] not in _skip
-            )
+            delta_text = "".join(all_texts[start:batch_end])
 
             result = parser.parse_delta(
                 delta_text,
@@ -182,11 +173,7 @@ def replay_streaming(
             continue
 
         batch_ids = all_ids[emitted_up_to:safe_end]
-        delta_text = "".join(
-            t
-            for i, t in enumerate(all_texts[emitted_up_to:safe_end])
-            if all_ids[emitted_up_to + i] not in _skip
-        )
+        delta_text = "".join(all_texts[emitted_up_to:safe_end])
         emitted_up_to = safe_end
 
         result = parser.parse_delta(
@@ -200,11 +187,7 @@ def replay_streaming(
 
     if emitted_up_to < len(tokens):
         batch_ids = all_ids[emitted_up_to:]
-        delta_text = "".join(
-            t
-            for i, t in enumerate(all_texts[emitted_up_to:])
-            if all_ids[emitted_up_to + i] not in _skip
-        )
+        delta_text = "".join(all_texts[emitted_up_to:])
         result = parser.parse_delta(
             delta_text,
             batch_ids,

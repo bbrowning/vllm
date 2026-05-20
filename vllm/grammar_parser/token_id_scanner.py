@@ -37,9 +37,9 @@ class TokenIDScanner:
     everything else is grouped into :class:`TextChunk` items for the
     incremental lexer to process.
 
-    This handles the case where ``skip_special_tokens=True`` strips the
-    text representation from ``delta_text`` -- the token ID is still
-    present in ``delta_token_ids``.
+    When a terminal's text is not yet in ``delta_text`` (held back by
+    the detokenizer), the terminal is deferred until the text arrives
+    in a subsequent delta.
     """
 
     def __init__(
@@ -47,14 +47,11 @@ class TokenIDScanner:
         token_id_to_terminal: dict[int, str],
         tokenizer,
         drop_token_ids: set[int] | None = None,
-        *,
-        token_id_text_in_delta: bool = False,
     ) -> None:
         self.token_id_to_terminal = token_id_to_terminal
         self.tokenizer = tokenizer
         self._token_text_cache: dict[int, str] = {}
         self._drop_token_ids = drop_token_ids or set()
-        self._token_id_text_in_delta = token_id_text_in_delta
         self._deferred_terminals: list[PreLexedTerminal] = []
         self._deferred_post_text: str = ""
 
@@ -191,11 +188,8 @@ class TokenIDScanner:
                 results.append(terminal)
                 remaining = remaining[len(terminal.text) :]
             else:
-                # For token_id_text_in_delta=True the text must appear in the
-                # stream; if remaining ends with a proper prefix of the
-                # terminal's text the bytes are still arriving via
-                # SentencePiece holdback — re-defer rather than firing early.
-                if self._token_id_text_in_delta and any(
+                # Text still arriving via SentencePiece holdback — re-defer.
+                if any(
                     remaining.endswith(terminal.text[:k])
                     for k in range(1, len(terminal.text))
                 ):
@@ -262,24 +256,16 @@ class TokenIDScanner:
     ) -> list[LexerInput]:
         """Rebuild results from delta_text using terminals as anchors.
 
-        When a terminal's text is not in delta_text, defer it to the
-        next scan() call (token_id_text_in_delta) or emit immediately
-        with holdback text placed by token order.
+        When context-dependent decoding creates a mismatch between
+        individually-decoded tokens and delta_text, use
+        PreLexedTerminals as split points and reallocate text from
+        delta_text.  If a terminal's text is not found in delta_text,
+        it is deferred to the next scan() call.
         """
-        tc_concat = "".join(
-            item.text for item in results if isinstance(item, TextChunk)
-        )
-        tc_lengths_reliable = tc_concat == delta_text
-
         new_results: list[LexerInput] = []
         remaining = delta_text
-        seen_text_before = False
-        text_before_len = 0
-        for i, item in enumerate(results):
+        for item in results:
             if not isinstance(item, PreLexedTerminal):
-                if isinstance(item, TextChunk) and item.text:
-                    seen_text_before = True
-                    text_before_len += len(item.text)
                 continue
             pos = remaining.find(item.text)
             if pos > 0:
@@ -290,27 +276,10 @@ class TokenIDScanner:
                 new_results.append(item)
                 remaining = remaining[len(item.text) :]
             else:
-                if self._token_id_text_in_delta:
-                    if remaining:
-                        self._deferred_post_text += remaining
-                        remaining = ""
-                    self._deferred_terminals.append(item)
-                elif tc_lengths_reliable and text_before_len > 0:
-                    split = min(text_before_len, len(remaining))
-                    new_results.append(TextChunk(remaining[:split]))
-                    remaining = remaining[split:]
-                    new_results.append(item)
-                else:
-                    has_text_after = not seen_text_before and any(
-                        isinstance(r, TextChunk) and r.text for r in results[i + 1 :]
-                    )
-                    text_before = remaining and (seen_text_before or not has_text_after)
-                    if text_before:
-                        new_results.append(TextChunk(remaining))
-                        remaining = ""
-                    new_results.append(item)
-            seen_text_before = False
-            text_before_len = 0
+                if remaining:
+                    self._deferred_post_text += remaining
+                    remaining = ""
+                self._deferred_terminals.append(item)
         if remaining:
             new_results.append(TextChunk(remaining))
         return new_results

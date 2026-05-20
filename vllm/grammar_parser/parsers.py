@@ -64,12 +64,6 @@ class Gemma4GrammarParser(GrammarParser):
         self._reasoning_text = ""
         self._prefix_stripped = False
 
-    def adjust_request(
-        self, request: ChatCompletionRequest | ResponsesRequest
-    ) -> ChatCompletionRequest | ResponsesRequest:
-        request.skip_special_tokens = False
-        return request
-
     def is_reasoning_end(self, input_ids: list[int]) -> bool:
         end_id = self._reasoning_end_token_id
         start_id = self._reasoning_start_token_id
@@ -275,9 +269,6 @@ class DeepSeekV4GrammarParser(GrammarParser):
     Initial state is CONTENT — the model generates ``<think>`` itself in
     thinking mode; in chat mode the prompt pre-fills ``</think>`` so the
     model outputs content directly.
-
-    ``skip_special_tokens=False`` is required so that DSML special tokens
-    appear in ``delta_text`` for text-based lexing.
     """
 
     def __init__(
@@ -292,9 +283,3 @@ class DeepSeekV4GrammarParser(GrammarParser):
             grammar_config=deepseek_v4_config(),
             **kwargs,
         )
-
-    def adjust_request(
-        self, request: ChatCompletionRequest | ResponsesRequest
-    ) -> ChatCompletionRequest | ResponsesRequest:
-        request.skip_special_tokens = False
-        return request

@@ -167,5 +167,4 @@ def gemma4_config() -> GrammarConfig:
         tool_args_json=False,
         arg_structural_chars=frozenset(",:{}[]<"),
         drop_tokens=_GEMMA4_MODEL_DROP_TOKENS - used_tokens,
-        token_id_text_in_delta=True,
     )
