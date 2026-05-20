@@ -16,8 +16,7 @@ def simulate_tool_streaming(
 ) -> list[tuple[DeltaMessage | None, str]]:
     """Feed text chunks through ``extract_tool_calls_streaming()``.
 
-    Uses dummy token IDs (``[0]`` per chunk).  For tests that need
-    explicit token IDs, use :func:`simulate_tool_streaming_with_ids`.
+    Uses dummy token IDs (``[0]`` per chunk).
     """
     results: list[tuple[Any, str]] = []
     previous_text = ""
@@ -35,36 +34,6 @@ def simulate_tool_streaming(
             previous_token_ids=tuple(previous_token_ids),
             current_token_ids=tuple(current_token_ids),
             delta_token_ids=tuple(delta_token_ids),
-            request=request,
-        )
-        results.append((delta, current_text))
-        previous_text = current_text
-        previous_token_ids = list(current_token_ids)
-
-    return results
-
-
-def simulate_tool_streaming_with_ids(
-    parser,
-    request,
-    deltas: list[tuple[str, list[int]]],
-) -> list[tuple[DeltaMessage | None, str]]:
-    """Feed ``(delta_text, delta_token_ids)`` pairs through streaming."""
-    results: list[tuple[Any, str]] = []
-    previous_text = ""
-    previous_token_ids: list[int] = []
-
-    for delta_text, delta_tids in deltas:
-        current_text = previous_text + delta_text
-        current_token_ids = previous_token_ids + delta_tids
-
-        delta = parser.extract_tool_calls_streaming(
-            previous_text=previous_text,
-            current_text=current_text,
-            delta_text=delta_text,
-            previous_token_ids=tuple(previous_token_ids),
-            current_token_ids=tuple(current_token_ids),
-            delta_token_ids=tuple(delta_tids),
             request=request,
         )
         results.append((delta, current_text))

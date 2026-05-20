@@ -405,6 +405,46 @@ class TestStreaming:
         parsed = json.loads(args_text)
         assert parsed["query"] == "hello world test"
 
+    def test_streaming_split_tool_call_tag(self, parser, mock_request):
+        """<tool_call> tag split across chunks."""
+        chunks = [
+            "<tool_",
+            "call>\n",
+            "<function=test>\n",
+            "<parameter=x>1</parameter>\n",
+            "</function>\n",
+            "</tool_call>",
+        ]
+        results = simulate_tool_streaming(parser, mock_request, chunks)
+
+        name = collect_function_name(results)
+        assert name == "test"
+
+        args_text = collect_tool_arguments(results)
+        assert args_text
+        parsed = json.loads(args_text)
+        assert parsed["x"] == 1
+
+    def test_char_by_char_streaming(self, parser, mock_request):
+        """Feed text character-by-character to test robustness."""
+        full_text = (
+            "<tool_call>\n"
+            "<function=echo>\n"
+            "<parameter=msg>hi</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+        chunks = list(full_text)
+        results = simulate_tool_streaming(parser, mock_request, chunks)
+
+        name = collect_function_name(results)
+        assert name == "echo"
+
+        args_text = collect_tool_arguments(results)
+        assert args_text
+        parsed = json.loads(args_text)
+        assert parsed == {"msg": "hi"}
+
     def test_streaming_multiline_param_values(self, parser, mock_request):
         """Multi-line parameter values in streaming mode."""
         chunks = [
