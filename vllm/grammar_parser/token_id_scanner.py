@@ -266,13 +266,20 @@ class TokenIDScanner:
         next scan() call (token_id_text_in_delta) or emit immediately
         with holdback text placed by token order.
         """
+        tc_concat = "".join(
+            item.text for item in results if isinstance(item, TextChunk)
+        )
+        tc_lengths_reliable = tc_concat == delta_text
+
         new_results: list[LexerInput] = []
         remaining = delta_text
         seen_text_before = False
+        text_before_len = 0
         for i, item in enumerate(results):
             if not isinstance(item, PreLexedTerminal):
                 if isinstance(item, TextChunk) and item.text:
                     seen_text_before = True
+                    text_before_len += len(item.text)
                 continue
             pos = remaining.find(item.text)
             if pos > 0:
@@ -288,6 +295,11 @@ class TokenIDScanner:
                         self._deferred_post_text += remaining
                         remaining = ""
                     self._deferred_terminals.append(item)
+                elif tc_lengths_reliable and text_before_len > 0:
+                    split = min(text_before_len, len(remaining))
+                    new_results.append(TextChunk(remaining[:split]))
+                    remaining = remaining[split:]
+                    new_results.append(item)
                 else:
                     has_text_after = not seen_text_before and any(
                         isinstance(r, TextChunk) and r.text for r in results[i + 1 :]
@@ -298,6 +310,7 @@ class TokenIDScanner:
                         remaining = ""
                     new_results.append(item)
             seen_text_before = False
+            text_before_len = 0
         if remaining:
             new_results.append(TextChunk(remaining))
         return new_results

@@ -20,12 +20,14 @@ from tests.grammar_parser.replay_harness import (
 )
 from vllm.grammar_parser.parsers import (
     Gemma4GrammarParser,
+    NemotronV3GrammarParser,
     Qwen3GrammarParser,
 )
 
 CHUNK_SIZES = [1, 2, 3, 5, 10, 20, None]
 
 _gemma4_samples = load_samples("gemma4")
+_nemotron_v3_samples = load_samples("nemotron_v3")
 _qwen3_samples = load_samples("qwen3")
 
 _GEMMA4_TERMINALS = ["<|channel>", "<channel|>", "<|tool_call>", "<tool_call|>"]
@@ -210,3 +212,53 @@ class TestGemma4AdjustRequest:
             "Expected 'thought' to leak into content without adjust_request, "
             "but parser handled it correctly — update this test"
         )
+
+
+_NEMOTRON_V3_TERMINALS = [
+    "<think>",
+    "</think>",
+    "<tool_call>",
+    "</tool_call>",
+]
+
+NEMOTRON_CHUNK_SIZES = [1, 2, 3, 5, 10, 19, 20, None]
+
+
+@pytest.mark.parametrize("chunk_size", NEMOTRON_CHUNK_SIZES, ids=lambda c: f"chunk{c}")
+@pytest.mark.parametrize("sample", _nemotron_v3_samples, ids=lambda s: s.id)
+class TestNemotronV3Replay:
+    """Replay Nemotron V3 token sequences at different chunk sizes."""
+
+    def test_parse_output(self, sample, chunk_size):
+        tokenizer = make_mock_tokenizer(sample)
+        parser = NemotronV3GrammarParser(tokenizer)
+        deltas = replay_streaming(parser, sample.tokens, chunk_size=chunk_size)
+        output = collect_output(deltas)
+        assert_parse_output(output, sample)
+
+    def test_parse_output_skip_special(self, sample, chunk_size):
+        """Simulate skip_special_tokens=True (the default for Nemotron V3)."""
+        special_ids = set(sample.vocab.values())
+        tokenizer = make_mock_tokenizer(sample)
+        parser = NemotronV3GrammarParser(tokenizer)
+        deltas = replay_streaming(
+            parser,
+            sample.tokens,
+            chunk_size=chunk_size,
+            special_token_ids=special_ids,
+        )
+        output = collect_output(deltas)
+        assert_parse_output(output, sample)
+
+    def test_no_terminal_leakage(self, sample, chunk_size):
+        """Terminal text must never appear in reasoning or content."""
+        tokenizer = make_mock_tokenizer(sample)
+        parser = NemotronV3GrammarParser(tokenizer)
+        deltas = replay_streaming(parser, sample.tokens, chunk_size=chunk_size)
+        output = collect_output(deltas)
+
+        for terminal in _NEMOTRON_V3_TERMINALS:
+            assert terminal not in output.reasoning, (
+                f"{terminal!r} leaked into reasoning"
+            )
+            assert terminal not in output.content, f"{terminal!r} leaked into content"
