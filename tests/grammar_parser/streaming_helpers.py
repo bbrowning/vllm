@@ -9,22 +9,38 @@ from typing import Any
 from vllm.entrypoints.openai.engine.protocol import DeltaMessage
 
 
+def _build_token_id_map(parser) -> dict[str, int]:
+    """Map special token text to token IDs from the parser's config."""
+    token_id_map: dict[str, int] = {}
+    cfg = getattr(parser, "grammar_config", None)
+    vocab = getattr(parser, "vocab", None)
+    if cfg is not None and vocab is not None:
+        for text in (cfg.token_id_terminals or {}).values():
+            tid = vocab.get(text)
+            if tid is not None:
+                token_id_map[text] = tid
+    return token_id_map
+
+
 def simulate_tool_streaming(
     parser,
     request,
     chunks: list[str],
 ) -> list[tuple[DeltaMessage | None, str]]:
-    """Feed text chunks through ``extract_tool_calls_streaming()``.
+    """Feed text chunks through ``extract_tool_calls_streaming()``."""
+    token_id_map = _build_token_id_map(parser)
 
-    Uses dummy token IDs (``[0]`` per chunk).
-    """
     results: list[tuple[Any, str]] = []
     previous_text = ""
     previous_token_ids: list[int] = []
 
     for chunk in chunks:
         current_text = previous_text + chunk
-        delta_token_ids: list[int] = [0]
+
+        delta_token_ids: list[int] = [
+            tid for text, tid in token_id_map.items() if text in chunk
+        ]
+
         current_token_ids = previous_token_ids + delta_token_ids
 
         delta = parser.extract_tool_calls_streaming(
@@ -77,6 +93,10 @@ def simulate_reasoning_streaming(
 
     Returns ``(reasoning_text, content_text)`` tuple.
     """
+    token_id_map = (
+        _build_token_id_map(parser) if delta_token_ids_per_chunk is None else {}
+    )
+
     reasoning_parts: list[str] = []
     content_parts: list[str] = []
     prev_text = ""
@@ -86,7 +106,7 @@ def simulate_reasoning_streaming(
         if delta_token_ids_per_chunk is not None:
             d_ids = delta_token_ids_per_chunk[i]
         else:
-            d_ids = (0,)
+            d_ids = tuple(tid for text, tid in token_id_map.items() if text in chunk)
         cur_ids = prev_ids + list(d_ids)
         delta = parser.extract_reasoning_streaming(
             previous_text=prev_text,

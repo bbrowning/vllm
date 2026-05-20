@@ -26,6 +26,8 @@ from vllm.grammar_parser.grammars.qwen3 import (
 )
 from vllm.grammar_parser.unified_parser import GrammarParser
 
+_SPECIAL_DECODE = {100: TOOL_CALL_START, 101: TOOL_CALL_END}
+
 
 @pytest.fixture
 def mock_tokenizer():
@@ -36,7 +38,7 @@ def mock_tokenizer():
         TOOL_CALL_END: 101,
     }
     tokenizer.decode.side_effect = lambda ids: "".join(
-        chr(i) if i < 128 else f"<{i}>" for i in ids
+        _SPECIAL_DECODE.get(i, chr(i) if i < 128 else f"<{i}>") for i in ids
     )
     return tokenizer
 
@@ -406,12 +408,13 @@ class TestStreaming:
         assert parsed["query"] == "hello world test"
 
     def test_streaming_split_tool_call_tag(self, parser, mock_request):
-        """<tool_call> tag split across chunks."""
+        """<tool_call> arrives as a single special token; the rest of
+        the content is split into fine-grained chunks."""
         chunks = [
-            "<tool_",
-            "call>\n",
+            "<tool_call>\n",
             "<function=test>\n",
-            "<parameter=x>1</parameter>\n",
+            "<parameter=x>1",
+            "</parameter>\n",
             "</function>\n",
             "</tool_call>",
         ]
@@ -425,8 +428,21 @@ class TestStreaming:
         parsed = json.loads(args_text)
         assert parsed["x"] == 1
 
-    def test_char_by_char_streaming(self, parser, mock_request):
-        """Feed text character-by-character to test robustness."""
+    def test_char_by_char_streaming(self, mock_request):
+        """Feed text character-by-character to test lexer robustness.
+
+        Uses a tokenizer without special token IDs because char-by-char
+        delivery only occurs when the tokenizer splits the tag across
+        multiple sub-word tokens (i.e., no dedicated special token).
+        """
+        tokenizer = MagicMock()
+        tokenizer.encode.return_value = [1, 2, 3]
+        tokenizer.get_vocab.return_value = {}
+        tokenizer.decode.side_effect = lambda ids: "".join(
+            chr(i) if i < 128 else f"<{i}>" for i in ids
+        )
+        no_tid_parser = GrammarParser(tokenizer, grammar_config=qwen3xml_config())
+
         full_text = (
             "<tool_call>\n"
             "<function=echo>\n"
@@ -435,7 +451,7 @@ class TestStreaming:
             "</tool_call>"
         )
         chunks = list(full_text)
-        results = simulate_tool_streaming(parser, mock_request, chunks)
+        results = simulate_tool_streaming(no_tid_parser, mock_request, chunks)
 
         name = collect_function_name(results)
         assert name == "echo"

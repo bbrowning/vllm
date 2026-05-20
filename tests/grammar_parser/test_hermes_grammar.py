@@ -18,6 +18,8 @@ from vllm.entrypoints.openai.chat_completion.protocol import (
 from vllm.grammar_parser.grammars.hermes import hermes_config
 from vllm.grammar_parser.unified_parser import GrammarParser
 
+_SPECIAL_DECODE = {100: "<tool_call>", 101: "</tool_call>"}
+
 
 @pytest.fixture
 def mock_tokenizer():
@@ -28,7 +30,7 @@ def mock_tokenizer():
         "</tool_call>": 101,
     }
     tokenizer.decode.side_effect = lambda ids: "".join(
-        chr(i) if i < 128 else f"<{i}>" for i in ids
+        _SPECIAL_DECODE.get(i, chr(i) if i < 128 else f"<{i}>") for i in ids
     )
     return tokenizer
 

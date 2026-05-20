@@ -544,7 +544,7 @@ def tool_call_tokenizer():
         '<|"|>': QUOTED_ID,
     }
     tokenizer.decode.side_effect = lambda ids: "".join(
-        chr(i) if i < 128 else f"<{i}>" for i in ids
+        SPECIAL_TOKEN_MAP.get(i, chr(i) if i < 128 else f"<{i}>") for i in ids
     )
     return tokenizer
 

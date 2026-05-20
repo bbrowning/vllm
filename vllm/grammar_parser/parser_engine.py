@@ -82,6 +82,11 @@ class StreamingParserEngine:
             drop_token_ids,
         )
 
+        self._token_id_terminal_names: frozenset[str] = frozenset(
+            resolved_token_ids.values()
+        )
+        self._ever_had_token_ids = False
+
         terminal_defs = terminals_from_literals(config.terminals)
         self._lexer = IncrementalLexer(terminal_defs, content_terminal="__CONTENT__")
 
@@ -96,6 +101,8 @@ class StreamingParserEngine:
         delta_token_ids: Sequence[int],
     ) -> list[SemanticEvent]:
         """Feed one streaming delta and return produced events."""
+        if delta_token_ids:
+            self._ever_had_token_ids = True
         scanner_items = self._scanner.scan(delta_text, delta_token_ids)
 
         if len(scanner_items) == 1 and isinstance(scanner_items[0], TextChunk):
@@ -201,8 +208,9 @@ class StreamingParserEngine:
     def _process_lex_tokens(self, tokens: list[LexToken]) -> list[SemanticEvent]:
         """Dispatch a list of lex tokens through _on_content / _on_terminal."""
         events: list[SemanticEvent] = []
+        strict = self._token_id_terminal_names if self._ever_had_token_ids else None
         for tok in tokens:
-            if tok.terminal == "__CONTENT__":
+            if tok.terminal == "__CONTENT__" or (strict and tok.terminal in strict):
                 events.extend(self._on_content(tok.value))
             else:
                 events.extend(self._on_terminal(tok.terminal, tok.value))

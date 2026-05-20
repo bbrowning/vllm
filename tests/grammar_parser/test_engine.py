@@ -10,6 +10,7 @@ from vllm.grammar_parser.grammar_config import (
     ParserState,
     Transition,
 )
+from vllm.grammar_parser.grammars.hermes import hermes_config
 from vllm.grammar_parser.parser_engine import StreamingParserEngine
 
 
@@ -260,6 +261,8 @@ class TestStreaming:
 
 _START_ID = 50
 _END_ID = 51
+_TOOL_START_ID = 60
+_TOOL_END_ID = 61
 
 
 def _make_think_tokenizer():
@@ -270,6 +273,21 @@ def _make_think_tokenizer():
         _START_ID: "<think>",
         _END_ID: "</think>",
     }.get(ids[0], f"tok{ids[0]}")
+    return tok
+
+
+def _make_hermes_tokenizer():
+    """Tokenizer that resolves tool_call tags to special IDs."""
+    _special = {_TOOL_START_ID: "<tool_call>", _TOOL_END_ID: "</tool_call>"}
+    tok = MagicMock()
+    tok.encode.return_value = [1, 2, 3]
+    tok.get_vocab.return_value = {
+        "<tool_call>": _TOOL_START_ID,
+        "</tool_call>": _TOOL_END_ID,
+    }
+    tok.decode.side_effect = lambda ids: "".join(
+        _special.get(i, chr(i) if i < 128 else f"<{i}>") for i in ids
+    )
     return tok
 
 
@@ -312,3 +330,73 @@ class TestLexerBufferFlush:
         assert any(e.type == EventType.REASONING_END for e in events)
         chunk_events = [e for e in events if e.type == EventType.REASONING_CHUNK]
         assert all(e.value for e in chunk_events)
+
+
+class TestTokenIdFiltering:
+    """When token IDs are available, lex-matched terminals that also
+    have token_id_terminal entries should be demoted to content."""
+
+    def test_lex_matched_terminal_demoted_after_token_ids_seen(self):
+        """After receiving token IDs, text that matches a token-ID
+        terminal should be treated as content, not trigger a transition."""
+        engine = StreamingParserEngine(hermes_config(), _make_hermes_tokenizer())
+
+        # First feed with a non-special token ID to set _ever_had_token_ids
+        engine.feed("prefix ", [1])
+
+        # Now feed text containing <tool_call> as literal text
+        events = engine.feed(
+            "Use <tool_call> to invoke tools.</tool_call>", [2, 3, 4, 5]
+        )
+        events.extend(engine.finish())
+
+        types = [e.type for e in events]
+        assert EventType.TOOL_CALL_START not in types
+        assert EventType.TEXT_CHUNK in types
+
+        text = "".join(e.value for e in events if e.type == EventType.TEXT_CHUNK)
+        assert "<tool_call>" in text
+
+    def test_scanner_matched_terminal_bypasses_filter(self):
+        """PreLexedTerminals from the scanner bypass the filter and
+        still trigger state transitions."""
+        engine = StreamingParserEngine(hermes_config(), _make_hermes_tokenizer())
+
+        events = engine.feed("<tool_call>", [_TOOL_START_ID])
+        assert any(e.type == EventType.TOOL_CALL_START for e in events)
+
+        events = engine.feed('{"name": "f"}', [2, 3])
+        events.extend(engine.feed("</tool_call>", [_TOOL_END_ID]))
+        events.extend(engine.finish())
+        assert any(e.type == EventType.TOOL_CALL_END for e in events)
+
+    def test_no_filtering_without_token_ids(self):
+        """When no token IDs are ever provided (non-streaming),
+        text matching still triggers transitions."""
+        engine = StreamingParserEngine(hermes_config(), _make_hermes_tokenizer())
+
+        events = engine.feed('<tool_call>{"name": "f"}</tool_call>', [])
+        events.extend(engine.finish())
+
+        types = [e.type for e in events]
+        assert EventType.TOOL_CALL_START in types
+        assert EventType.TOOL_CALL_END in types
+
+    def test_mixed_text_then_real_tool_call(self):
+        """Text mentioning tool syntax followed by a real special-token
+        tool call."""
+        engine = StreamingParserEngine(hermes_config(), _make_hermes_tokenizer())
+
+        events1 = engine.feed("Mention <tool_call> in text. ", [1, 2, 3, 4])
+        events2 = engine.feed("<tool_call>", [_TOOL_START_ID])
+        events3 = engine.feed('{"name": "a"}', [5, 6])
+        events4 = engine.feed("</tool_call>", [_TOOL_END_ID])
+        events4.extend(engine.finish())
+
+        all_events = events1 + events2 + events3 + events4
+
+        content = "".join(e.value for e in all_events if e.type == EventType.TEXT_CHUNK)
+        assert "<tool_call>" in content
+
+        assert sum(1 for e in all_events if e.type == EventType.TOOL_CALL_START) == 1
+        assert sum(1 for e in all_events if e.type == EventType.TOOL_CALL_END) == 1

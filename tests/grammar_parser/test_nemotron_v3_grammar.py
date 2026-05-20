@@ -271,3 +271,127 @@ class TestStreaming:
         assert args_text
         parsed = json.loads(args_text)
         assert parsed == {"city": "Tokyo"}
+
+
+class TestParseDeltaTokenIdFiltering:
+    """parse_delta must not trigger tool call parsing when <tool_call>
+    appears as regular text rather than as a special token ID."""
+
+    def test_tool_call_text_in_reasoning_is_not_parsed(self, parser):
+        """Literal <tool_call> in model reasoning should be content,
+        not a tool call."""
+        request = _make_request()
+
+        text = (
+            "The test uses <tool_call> syntax:\n"
+            "<tool_call>\n"
+            "<function=Bash>\n"
+            "<parameter=command>ls</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+        result = parser.parse_delta(
+            delta_text=text,
+            delta_token_ids=[_TEXT_ID] * 6,
+            request=request,
+            prompt_token_ids=[],
+            finished=True,
+        )
+
+        assert result is not None
+        assert result.reasoning is not None
+        assert "<tool_call>" in result.reasoning
+        assert not result.tool_calls
+
+    def test_special_token_id_still_triggers_tool_call(self, parser):
+        """When the scanner matches a special token ID, the tool call
+        must still be parsed correctly."""
+        request = _make_request()
+
+        parser.parse_delta(
+            delta_text="Let me check.",
+            delta_token_ids=[_TEXT_ID, _TEXT_ID, _TEXT_ID],
+            request=request,
+            prompt_token_ids=[],
+        )
+
+        parser.parse_delta(
+            delta_text="<tool_call>",
+            delta_token_ids=[_TOOL_CALL_ID],
+            request=request,
+        )
+
+        parser.parse_delta(
+            delta_text=(
+                "\n<function=get_weather>\n"
+                "<parameter=city>Tokyo</parameter>\n"
+                "</function>\n"
+            ),
+            delta_token_ids=[_TEXT_ID] * 5,
+            request=request,
+        )
+
+        parser.parse_delta(
+            delta_text="</tool_call>",
+            delta_token_ids=[_TOOL_CALL_END_ID],
+            request=request,
+            finished=True,
+        )
+
+        all_names: list[str] = []
+        all_names.extend(n for n in parser._tool_names if n)
+        assert "get_weather" in all_names
+
+    def test_text_discussion_then_real_tool_call(self, parser):
+        """Model discusses tool syntax in reasoning, then makes a real
+        tool call via special tokens."""
+        request = _make_request()
+
+        r1 = parser.parse_delta(
+            delta_text="Use <tool_call> to invoke tools.",
+            delta_token_ids=[_TEXT_ID] * 6,
+            request=request,
+            prompt_token_ids=[],
+        )
+
+        r2 = parser.parse_delta(
+            delta_text="</think>",
+            delta_token_ids=[_THINK_END_ID],
+            request=request,
+        )
+
+        r3 = parser.parse_delta(
+            delta_text="<tool_call>",
+            delta_token_ids=[_TOOL_CALL_ID],
+            request=request,
+        )
+
+        r4 = parser.parse_delta(
+            delta_text=("\n<function=test>\n<parameter=x>1</parameter>\n</function>\n"),
+            delta_token_ids=[_TEXT_ID] * 4,
+            request=request,
+        )
+
+        r5 = parser.parse_delta(
+            delta_text="</tool_call>",
+            delta_token_ids=[_TOOL_CALL_END_ID],
+            request=request,
+            finished=True,
+        )
+
+        reasoning = "".join(
+            r.reasoning for r in [r1, r2, r3, r4, r5] if r and r.reasoning
+        )
+        assert "<tool_call>" in reasoning
+
+        all_tool_calls = []
+        for r in [r1, r2, r3, r4, r5]:
+            if r and r.tool_calls:
+                all_tool_calls.extend(r.tool_calls)
+
+        names = [
+            tc.function.name
+            for tc in all_tool_calls
+            if tc.function and tc.function.name
+        ]
+        assert "test" in names
