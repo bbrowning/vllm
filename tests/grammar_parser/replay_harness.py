@@ -109,6 +109,7 @@ def replay_streaming(
     tokens: list[tuple[int, str]],
     chunk_size: int | None = None,
     holdback_chars: int = 0,
+    finished_on_last: bool = False,
 ) -> list[DeltaMessage | None]:
     """Feed tokens through ``parser.parse_delta()`` at a given chunk size.
 
@@ -118,17 +119,14 @@ def replay_streaming(
         chunk_size: Number of tokens per batch. ``None`` means all at once.
         holdback_chars: Simulate detokenizer holdback by holding back
             this many characters of decoded text between batches.
+        finished_on_last: When True, pass ``finished=True`` on the last
+            ``parse_delta()`` call, matching real server behavior.
 
     Returns:
         List of ``DeltaMessage`` results from each ``parse_delta()`` call.
     """
     if chunk_size is None:
         chunk_size = len(tokens)
-
-    request = ChatCompletionRequest(
-        model="test-model",
-        messages=[{"role": "user", "content": "test"}],
-    )
 
     results: list[DeltaMessage | None] = []
     all_ids = [tid for tid, _ in tokens]
@@ -140,16 +138,19 @@ def replay_streaming(
     )
 
     if holdback_chars <= 0:
-        for start in range(0, len(tokens), chunk_size):
+        chunks = list(range(0, len(tokens), chunk_size))
+        for i, start in enumerate(chunks):
             batch_end = min(start + chunk_size, len(tokens))
             batch_ids = all_ids[start:batch_end]
             delta_text = "".join(all_texts[start:batch_end])
+            is_last = i == len(chunks) - 1
 
             result = parser.parse_delta(
                 delta_text,
                 batch_ids,
                 request,
                 prompt_token_ids=[] if start == 0 else None,
+                finished=finished_on_last and is_last,
             )
             results.append(result)
         return results
@@ -176,11 +177,13 @@ def replay_streaming(
         delta_text = "".join(all_texts[emitted_up_to:safe_end])
         emitted_up_to = safe_end
 
+        is_last_chunk = batch_end >= len(tokens)
         result = parser.parse_delta(
             delta_text,
             batch_ids,
             request,
             prompt_token_ids=[] if is_first else None,
+            finished=finished_on_last and is_last_chunk,
         )
         results.append(result)
         is_first = False
@@ -193,6 +196,7 @@ def replay_streaming(
             batch_ids,
             request,
             prompt_token_ids=[] if is_first else None,
+            finished=finished_on_last,
         )
         results.append(result)
 

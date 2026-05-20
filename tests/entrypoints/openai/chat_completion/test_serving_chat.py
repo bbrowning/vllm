@@ -809,6 +809,49 @@ async def test_serving_chat_should_set_correct_max_tokens():
 
 
 @pytest.mark.asyncio
+async def test_serving_chat_parser_adjust_request_sets_skip_special_tokens():
+    """Parser.adjust_request() must run before to_sampling_params()
+    so that parser-set flags like skip_special_tokens=False reach
+    the detokenizer.  Without this, grammar parsers that rely on
+    special-token text in delta_text silently break.
+    """
+    mock_engine = MagicMock(spec=AsyncLLM)
+    mock_engine.errored = False
+    mock_engine.model_config = MockModelConfig()
+    mock_engine.input_processor = MagicMock()
+    mock_engine.renderer = _build_renderer(mock_engine.model_config)
+
+    serving_chat = _build_serving_chat(mock_engine)
+
+    # Simulate a unified parser whose adjust_request sets
+    # skip_special_tokens=False (as all grammar parsers do).
+    class _StubParser:
+        def __init__(self, tokenizer, tools=None, **kwargs):
+            pass
+
+        def adjust_request(self, request):
+            request.skip_special_tokens = False
+            return request
+
+    serving_chat.parser_cls = _StubParser
+
+    req = ChatCompletionRequest(
+        model=MODEL_NAME,
+        messages=[{"role": "user", "content": "hello"}],
+    )
+    assert req.skip_special_tokens is True
+
+    with suppress(Exception):
+        await serving_chat.create_chat_completion(req)
+
+    sampling_params = mock_engine.generate.call_args.args[1]
+    assert sampling_params.skip_special_tokens is False, (
+        "adjust_request() must be called before to_sampling_params() "
+        "so that skip_special_tokens=False reaches the detokenizer"
+    )
+
+
+@pytest.mark.asyncio
 async def test_serving_chat_truncate_prompt_tokens_max_token_accounting():
     """When truncate_prompt_tokens is set, max_tokens must be calculated using
     the truncated prompt length, not the original prompt length.

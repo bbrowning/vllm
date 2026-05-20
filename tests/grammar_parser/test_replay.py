@@ -225,6 +225,40 @@ class TestNemotronV3Replay:
             assert terminal not in output.content, f"{terminal!r} leaked into content"
 
 
+class TestNemotronV3StreamInterval19:
+    """Replay captured sample at stream_interval=19 with aligned text/tokens.
+
+    These tests verify the parser works when ``skip_special_tokens=False``
+    is properly set (text and token IDs are aligned).
+    """
+
+    _target_id = "nemotron-v3-live-capture-git-diff-003"
+
+    def _get_sample(self):
+        for s in _nemotron_v3_samples:
+            if s.id == self._target_id:
+                return s
+        pytest.skip(f"sample {self._target_id!r} not found")
+
+    @pytest.mark.parametrize(
+        "chunk_size", [19, 20, 10, 5, 1], ids=lambda c: f"chunk{c}"
+    )
+    @pytest.mark.parametrize("finished", [False, True], ids=["no_finish", "finish"])
+    def test_tool_call_args_parsed(self, chunk_size, finished):
+        """Tool call must have non-empty command argument."""
+        sample = self._get_sample()
+        tokenizer = make_mock_tokenizer(sample)
+        parser = NemotronV3GrammarParser(tokenizer)
+        deltas = replay_streaming(
+            parser,
+            sample.tokens,
+            chunk_size=chunk_size,
+            finished_on_last=finished,
+        )
+        output = collect_output(deltas)
+        assert_parse_output(output, sample)
+
+
 class TestNemotronV3DeferralFinish:
     """Test that parse_delta(finished=True) resolves deferred scanner state.
 

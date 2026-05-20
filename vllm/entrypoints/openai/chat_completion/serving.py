@@ -8,7 +8,7 @@ import time
 from collections.abc import AsyncGenerator, AsyncIterator
 from collections.abc import Sequence as GenericSequence
 from http import HTTPStatus
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import numpy as np
 import pybase64 as base64
@@ -256,6 +256,38 @@ class OpenAIServingChat(OpenAIServing):
                 tokenizer,
                 chat_template_kwargs=chat_template_kwargs,  # type: ignore[call-arg]
             )
+
+        # Let parsers adjust the request before SamplingParams are created
+        # from it (e.g. grammar parsers set skip_special_tokens=False).
+        if reasoning_parser is not None:
+            request = cast(
+                ChatCompletionRequest,
+                reasoning_parser.adjust_request(request=request),
+            )
+        if self.tool_parser is not None:
+            tool_choice = getattr(request, "tool_choice", "none")
+            is_mistral_grammar_eligible = (
+                is_mistral_tool_parser(self.tool_parser)
+                and is_mistral_tokenizer(tokenizer)
+                and tokenizer.supports_grammar
+            )
+            if tool_choice != "none" or is_mistral_grammar_eligible:
+                request = cast(
+                    ChatCompletionRequest,
+                    self.tool_parser(tokenizer, request.tools).adjust_request(
+                        request=request
+                    ),
+                )
+        if (
+            self.parser_cls is not None
+            and reasoning_parser is None
+            and self.tool_parser is None
+        ):
+            request = cast(
+                ChatCompletionRequest,
+                self.parser_cls(tokenizer).adjust_request(request=request),
+            )
+
         result = await self.render_chat_request(request)
         if isinstance(result, ErrorResponse):
             return result
