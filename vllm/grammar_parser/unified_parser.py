@@ -398,9 +398,20 @@ class GrammarParser(Parser):
 
         from vllm.utils import random_uuid
 
-        reasoning, content = self.extract_reasoning(model_output, request)
+        # Single-pass parse with token IDs so the engine can
+        # distinguish real special tokens from text that happens
+        # to look like them (e.g. "<tool_call>" in source code).
+        self._reset()
+        events = self._engine.feed(model_output, model_output_token_ids)
+        events.extend(self._engine.finish())
 
-        tool_call_info = self.extract_tool_calls(model_output, request)  # type: ignore[arg-type]
+        delta = self._events_to_delta(events)
+        tool_call_info = self._build_extracted_result()
+
+        reasoning = delta.reasoning if delta else None
+        content = delta.content if delta else None
+        if tool_call_info.tools_called and content:
+            content = content.strip() or None
 
         outputs: list[ResponseOutputItem] = []
 
@@ -419,16 +430,13 @@ class GrammarParser(Parser):
                 )
             )
 
-        remaining_content = (
-            tool_call_info.content if tool_call_info.tools_called else content
-        )
-        if remaining_content:
+        if content:
             outputs.append(
                 ResponseOutputMessage(
                     id=f"msg_{random_uuid()}",
                     content=[
                         ResponseOutputText(
-                            text=remaining_content,
+                            text=content,
                             annotations=[],
                             type="output_text",
                             logprobs=logprobs,

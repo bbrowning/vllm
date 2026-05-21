@@ -252,3 +252,109 @@ class TestStreaming:
         assert args_text
         parsed = json.loads(args_text)
         assert parsed == {"key": "value"}
+
+
+class TestExtractResponseOutputs:
+    """Tests for extract_response_outputs with token-ID-aware filtering."""
+
+    _TOOL_START_ID = 100
+    _TOOL_END_ID = 101
+
+    def test_tool_call_text_in_content_not_detected_with_token_ids(
+        self, parser, mock_request
+    ):
+        """When token IDs indicate no special tokens, text that looks like
+        tool call syntax should be treated as plain content."""
+        text = "Use <tool_call> to invoke tools."
+        token_ids = [1, 2, 3, 4, 5, 6]
+
+        outputs = parser.extract_response_outputs(
+            model_output=text,
+            model_output_token_ids=token_ids,
+            request=mock_request,
+        )
+
+        tool_calls = [
+            o for o in outputs if hasattr(o, "type") and o.type == "function_call"
+        ]
+        assert len(tool_calls) == 0
+
+        messages = [o for o in outputs if hasattr(o, "type") and o.type == "message"]
+        assert len(messages) == 1
+        assert "<tool_call>" in messages[0].content[0].text
+
+    def test_real_tool_call_detected_with_special_token_ids(self, parser, mock_request):
+        """When token IDs include special token IDs, tool calls are
+        correctly extracted."""
+        text = (
+            '<tool_call>{"name": "get_weather", '
+            '"arguments": {"city": "Tokyo"}}</tool_call>'
+        )
+        token_ids = [self._TOOL_START_ID, 2, 3, 4, self._TOOL_END_ID]
+
+        outputs = parser.extract_response_outputs(
+            model_output=text,
+            model_output_token_ids=token_ids,
+            request=mock_request,
+        )
+
+        tool_calls = [
+            o for o in outputs if hasattr(o, "type") and o.type == "function_call"
+        ]
+        assert len(tool_calls) == 1
+        assert tool_calls[0].name == "get_weather"
+        args = json.loads(tool_calls[0].arguments)
+        assert args == {"city": "Tokyo"}
+
+    def test_literal_mention_then_real_tool_call(self, parser, mock_request):
+        """Content mentioning tool syntax followed by a real tool call
+        via special token IDs."""
+        text = (
+            "Use <tool_call> like this: "
+            '<tool_call>{"name": "search", "arguments": {"q": "x"}}</tool_call>'
+        )
+        token_ids = [
+            1,
+            2,
+            3,
+            4,
+            5,
+            self._TOOL_START_ID,
+            6,
+            7,
+            8,
+            self._TOOL_END_ID,
+        ]
+
+        outputs = parser.extract_response_outputs(
+            model_output=text,
+            model_output_token_ids=token_ids,
+            request=mock_request,
+        )
+
+        tool_calls = [
+            o for o in outputs if hasattr(o, "type") and o.type == "function_call"
+        ]
+        assert len(tool_calls) == 1
+        assert tool_calls[0].name == "search"
+
+        messages = [o for o in outputs if hasattr(o, "type") and o.type == "message"]
+        assert len(messages) == 1
+        assert "<tool_call>" in messages[0].content[0].text
+
+    def test_no_token_ids_falls_back_to_text_matching(self, parser, mock_request):
+        """When no token IDs are provided, text matching still works
+        (backwards compatibility)."""
+        text = '<tool_call>{"name": "f", "arguments": {}}</tool_call>'
+
+        outputs = parser.extract_response_outputs(
+            model_output=text,
+            model_output_token_ids=[],
+            request=mock_request,
+        )
+
+        tool_calls = [
+            o for o in outputs if hasattr(o, "type") and o.type == "function_call"
+        ]
+        assert len(tool_calls) == 1
+        assert tool_calls[0].name == "f"

@@ -267,25 +267,42 @@ class TokenIDScanner:
         PreLexedTerminals as split points and reallocate text from
         delta_text.  If a terminal's text is not found in delta_text,
         it is deferred to the next scan() call.
+
+        Anchors are resolved right-to-left with ``rfind`` so that each
+        anchor binds to the *rightmost* available occurrence of its
+        text.  This prevents earlier literal lookalikes (e.g. a user
+        mentioning ``<tool_call>`` in prose) from stealing the position
+        of a real special-token anchor that appears later.
         """
+        anchors = [item for item in results if isinstance(item, PreLexedTerminal)]
+        if not anchors:
+            return [TextChunk(delta_text)]
+
+        # Resolve positions right-to-left: each anchor gets the
+        # rightmost occurrence that is still before the next anchor.
+        positions: list[int] = [-1] * len(anchors)
+        search_end = len(delta_text)
+        for i in range(len(anchors) - 1, -1, -1):
+            pos = delta_text.rfind(anchors[i].text, 0, search_end)
+            if pos >= 0:
+                positions[i] = pos
+                search_end = pos
+
+        # Build results left-to-right using the resolved positions.
         new_results: list[LexerInput] = []
-        remaining = delta_text
-        for item in results:
-            if not isinstance(item, PreLexedTerminal):
-                continue
-            pos = remaining.find(item.text)
-            if pos > 0:
-                new_results.append(TextChunk(remaining[:pos]))
-                new_results.append(item)
-                remaining = remaining[pos + len(item.text) :]
-            elif pos == 0:
-                new_results.append(item)
-                remaining = remaining[len(item.text) :]
+        consumed = 0
+        for i, anchor in enumerate(anchors):
+            pos = positions[i]
+            if pos >= consumed:
+                if pos > consumed:
+                    new_results.append(TextChunk(delta_text[consumed:pos]))
+                new_results.append(anchor)
+                consumed = pos + len(anchor.text)
             else:
-                if remaining:
-                    self._deferred_post_text += remaining
-                    remaining = ""
-                self._deferred_terminals.append(item)
-        if remaining:
-            new_results.append(TextChunk(remaining))
+                if consumed < len(delta_text):
+                    self._deferred_post_text += delta_text[consumed:]
+                    consumed = len(delta_text)
+                self._deferred_terminals.append(anchor)
+        if consumed < len(delta_text):
+            new_results.append(TextChunk(delta_text[consumed:]))
         return new_results

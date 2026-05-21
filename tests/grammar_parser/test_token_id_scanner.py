@@ -21,6 +21,10 @@ CHANNEL_END = "<channel|>"
 CHANNEL_START_ID = 100
 CHANNEL_END_ID = 101
 REGULAR_TOKEN_ID = 200
+TOOL_START = "<tool_call>"
+TOOL_END = "</tool_call>"
+TOOL_START_ID = 110
+TOOL_END_ID = 111
 
 
 @pytest.fixture
@@ -1070,3 +1074,73 @@ class TestStreamInterval10:
 
         assert _has_event(events, EventType.REASONING_START)
         assert _has_event(events, EventType.REASONING_END)
+
+
+class TestRebuildFromAnchorsLiteralLookalike:
+    """When delta_text contains a literal mention of a special token's
+    text before the real special token, _rebuild_from_anchors must
+    anchor at the real occurrence, not the literal one."""
+
+    @pytest.fixture
+    def tool_scanner(self):
+        tok = MagicMock()
+        tok.get_vocab.return_value = {
+            TOOL_START: TOOL_START_ID,
+            TOOL_END: TOOL_END_ID,
+        }
+        tok.decode.side_effect = lambda ids: {
+            TOOL_START_ID: TOOL_START,
+            TOOL_END_ID: TOOL_END,
+        }.get(ids[0], f"t{ids[0]}")
+        return TokenIDScanner(
+            {TOOL_START_ID: "TOOL_START", TOOL_END_ID: "TOOL_END"},
+            tok,
+        )
+
+    def test_literal_before_real_anchor(self, tool_scanner):
+        """Literal <tool_call> in prose followed by a real <tool_call>
+        special token — the scanner must split at the real one."""
+        delta_text = 'Use <tool_call> like this: <tool_call>{"name":"f"}</tool_call>'
+        delta_token_ids = [1, 2, 3, 4, 5, TOOL_START_ID, 6, 7, TOOL_END_ID]
+        items = tool_scanner.scan(delta_text, delta_token_ids)
+
+        text_parts = [it.text for it in items if isinstance(it, TextChunk)]
+        terminals = [it for it in items if isinstance(it, PreLexedTerminal)]
+
+        assert len(terminals) == 2
+        assert terminals[0].terminal == "TOOL_START"
+        assert terminals[1].terminal == "TOOL_END"
+
+        # The literal mention must appear in a text chunk, not be
+        # consumed by the TOOL_START anchor.
+        joined_text = "".join(text_parts)
+        assert "<tool_call>" in joined_text
+        assert '{"name":"f"}' in joined_text
+
+    def test_multiple_tool_calls_with_literal_between(self, tool_scanner):
+        """Two real tool calls with a literal mention between them."""
+        delta_text = (
+            '<tool_call>{"name":"a"}</tool_call>'
+            " see <tool_call> syntax "
+            '<tool_call>{"name":"b"}</tool_call>'
+        )
+        delta_token_ids = [
+            TOOL_START_ID,
+            1,
+            TOOL_END_ID,
+            2,
+            3,
+            4,
+            TOOL_START_ID,
+            5,
+            TOOL_END_ID,
+        ]
+        items = tool_scanner.scan(delta_text, delta_token_ids)
+
+        terminals = [it for it in items if isinstance(it, PreLexedTerminal)]
+        assert len(terminals) == 4
+
+        text_parts = [it.text for it in items if isinstance(it, TextChunk)]
+        joined_text = "".join(text_parts)
+        # The literal mention between the two real calls must be in text
+        assert "<tool_call> syntax" in joined_text
