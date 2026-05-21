@@ -159,13 +159,13 @@ def consume_space(i: int, s: str) -> int:
 
 def _extract_tool_info(
     tool: Tool,
-) -> tuple[str, dict[str, Any] | None]:
+) -> tuple[str, dict[str, Any] | None] | None:
     if isinstance(tool, FunctionTool):
         return tool.name, tool.parameters
     elif isinstance(tool, ChatCompletionToolsParam):
         return tool.function.name, tool.function.parameters
     else:
-        raise TypeError(f"Unsupported tool type: {type(tool)}")
+        return None
 
 
 def find_tool_properties(
@@ -176,14 +176,19 @@ def find_tool_properties(
     if not tools:
         return {}
     for tool in tools:
-        name, params = _extract_tool_info(tool)
+        info = _extract_tool_info(tool)
+        if info is None:
+            continue
+        name, params = info
         if name == tool_name:
             return (params or {}).get("properties", {})
     return {}
 
 
 def _get_tool_schema_from_tool(tool: Tool) -> dict:
-    name, params = _extract_tool_info(tool)
+    info = _extract_tool_info(tool)
+    assert info is not None
+    name, params = info
     params = params if params else {"type": "object", "properties": {}}
     return {
         "properties": {
@@ -199,7 +204,10 @@ def _get_tool_schema_defs(
 ) -> dict:
     all_defs: dict[str, dict[str, Any]] = {}
     for tool in tools:
-        _, params = _extract_tool_info(tool)
+        info = _extract_tool_info(tool)
+        if info is None:
+            continue
+        _, params = info
         if params is None:
             continue
         defs = params.pop("$defs", {})
@@ -216,15 +224,16 @@ def _get_tool_schema_defs(
 def _get_json_schema_from_tools(
     tools: list[Tool],
 ) -> dict:
+    fn_tools = [t for t in tools if _extract_tool_info(t) is not None]
     json_schema = {
         "type": "array",
         "minItems": 1,
         "items": {
             "type": "object",
-            "anyOf": [_get_tool_schema_from_tool(tool) for tool in tools],
+            "anyOf": [_get_tool_schema_from_tool(tool) for tool in fn_tools],
         },
     }
-    json_schema_defs = _get_tool_schema_defs(tools)
+    json_schema_defs = _get_tool_schema_defs(fn_tools)
     if json_schema_defs:
         json_schema["$defs"] = json_schema_defs
     return json_schema
