@@ -189,15 +189,6 @@ class GrammarParser(Parser):
         if self._capture_tokens is not None:
             for tid in delta_token_ids:
                 self._capture_tokens.append([tid, ""])
-        if not delta_text and delta_token_ids:
-            logger.warning(
-                "parse_delta: empty delta_text with %d token_ids "
-                "(state=%s, finished=%s, ids=%s)",
-                len(delta_token_ids),
-                self._engine.state.name,
-                finished,
-                delta_token_ids[:5],
-            )
         events = self._engine.feed(delta_text, delta_token_ids)
         if finished:
             events.extend(self._engine.finish())

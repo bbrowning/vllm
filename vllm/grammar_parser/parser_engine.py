@@ -75,6 +75,10 @@ class StreamingParserEngine:
                 tid = vocab.get(token_text)
                 if tid is not None:
                     drop_token_ids.add(tid)
+            for attr in ("eos_token_id", "bos_token_id", "pad_token_id"):
+                tid = getattr(tokenizer, attr, None)
+                if tid is not None:
+                    drop_token_ids.add(tid)
 
         self._scanner = TokenIDScanner(
             resolved_token_ids,
