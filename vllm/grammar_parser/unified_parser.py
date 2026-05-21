@@ -13,6 +13,7 @@ same token stream.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from collections.abc import Sequence
@@ -79,6 +80,7 @@ class GrammarParser(Parser):
         self._streamed_json: list[str] = []
 
         self._capture_tokens: list[list] | None = [] if _DUMP_PATH else None
+        self._capture_deltas: list[DeltaMessage] | None = [] if _DUMP_PATH else None
         if self._capture_tokens is not None:
             logger.info(
                 "Token capture enabled for %s -> %s",
@@ -192,7 +194,10 @@ class GrammarParser(Parser):
         events = self._engine.feed(delta_text, delta_token_ids)
         if finished:
             events.extend(self._engine.finish())
-        return self._events_to_delta(events)
+        result = self._events_to_delta(events)
+        if self._capture_deltas is not None and result is not None:
+            self._capture_deltas.append(result)
+        return result
 
     def flush_capture(self) -> None:
         """Write captured token sequence to the dump file.
@@ -225,12 +230,17 @@ class GrammarParser(Parser):
         for tid_text in self._capture_tokens:
             tid_text[1] = token_decode_map.get(tid_text[0], "")
 
+        text = "".join(t[1] for t in self._capture_tokens)
+        parsed = self._merge_captured_deltas() if self._capture_deltas else None
+
         record = {
             "id": f"{self.grammar_config.name}-capture-auto",
             "description": "auto-captured from live model run",
             "source": "VLLM_DUMP_PARSER_TOKENS",
             "vocab": vocab_capture,
             "tokens": self._capture_tokens,
+            "text": text,
+            "parsed": parsed,
         }
 
         with open(_DUMP_PATH, "a") as f:
@@ -242,6 +252,56 @@ class GrammarParser(Parser):
             _DUMP_PATH,
         )
         self._capture_tokens = []
+        self._capture_deltas = []
+
+    def _merge_captured_deltas(self) -> dict:
+        """Merge accumulated ``DeltaMessage`` results into a parsed record."""
+        reasoning_parts: list[str] = []
+        content_parts: list[str] = []
+        tool_calls: list[dict] = []
+
+        for delta in self._capture_deltas:  # type: ignore[union-attr]
+            if delta.reasoning:
+                reasoning_parts.append(delta.reasoning)
+            if delta.content:
+                content_parts.append(delta.content)
+            for tc in delta.tool_calls:
+                if tc.function and tc.function.name:
+                    existing = None
+                    for etx in tool_calls:
+                        if etx.get("_idx") == tc.index:
+                            existing = etx
+                            break
+                    if existing is None:
+                        tool_calls.append(
+                            {
+                                "_idx": tc.index,
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments or "",
+                            }
+                        )
+                    else:
+                        existing["arguments"] += tc.function.arguments or ""
+                elif tc.function and tc.function.arguments:
+                    for etx in tool_calls:
+                        if etx.get("_idx") == tc.index:
+                            etx["arguments"] += tc.function.arguments
+                            break
+
+        for tc in tool_calls:
+            tc.pop("_idx", None)
+            args_str = tc.get("arguments", "")
+            if args_str:
+                with contextlib.suppress(json.JSONDecodeError, ValueError):
+                    tc["arguments"] = json.loads(args_str)
+
+        reasoning = "".join(reasoning_parts) or None
+        content = "".join(content_parts) or None
+        return {
+            "reasoning": reasoning,
+            "content": content,
+            "tool_calls": tool_calls if tool_calls else [],
+        }
 
     # ── Non-streaming: extract_reasoning ──────────────────────────────
 

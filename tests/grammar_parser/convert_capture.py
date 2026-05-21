@@ -157,8 +157,6 @@ def convert_entry(
     tokens = _strip_stop_tokens(data["tokens"])
     vocab = data["vocab"]
 
-    parsed = _partition_by_token_ids(tokens, vocab)
-
     num = start_number + entry_index
     suffix = _SUFFIXES[entry_index] if entry_index < len(_SUFFIXES) else "entry"
     fixture_id = f"{prefix}-{suffix}-{num:03d}"
@@ -168,22 +166,30 @@ def convert_entry(
         else data.get("description", "")
     )
 
-    expected_tool_calls = []
-    for tc in parsed.tool_calls:
-        args_json = _qwen3xml_arg_converter(tc.raw_args, partial=False)
-        args_dict = json.loads(args_json)
-        expected_tool_calls.append({"name": tc.name, "arguments": args_dict})
-
-    expected: dict = {
-        "reasoning": parsed.reasoning or None,
-        "content": parsed.content or None,
-        "tool_calls": expected_tool_calls if expected_tool_calls else [],
-    }
+    if "parsed" in data and data["parsed"] is not None:
+        pr = data["parsed"]
+        expected: dict = {
+            "reasoning": pr.get("reasoning"),
+            "content": pr.get("content"),
+            "tool_calls": pr.get("tool_calls", []),
+        }
+    else:
+        parsed = _partition_by_token_ids(tokens, vocab)
+        expected_tool_calls = []
+        for tc in parsed.tool_calls:
+            args_json = _qwen3xml_arg_converter(tc.raw_args, partial=False)
+            args_dict = json.loads(args_json)
+            expected_tool_calls.append({"name": tc.name, "arguments": args_dict})
+        expected = {
+            "reasoning": parsed.reasoning or None,
+            "content": parsed.content or None,
+            "tool_calls": expected_tool_calls if expected_tool_calls else [],
+        }
 
     return {
         "id": fixture_id,
         "description": description,
-        "source": "qwen36-live-capture",
+        "source": data.get("source", "live-capture"),
         "vocab": vocab,
         "tokens": tokens,
         "expected": expected,
