@@ -10,8 +10,8 @@ from vllm.grammar_parser.grammar_config import (
     ParserState,
     Transition,
 )
-from vllm.grammar_parser.grammars.hermes import hermes_config
 from vllm.grammar_parser.parser_engine import StreamingParserEngine
+from vllm.grammar_parser.parsers.hermes import hermes_config
 
 
 def _hermes_config() -> GrammarConfig:

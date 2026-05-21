@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Grammar configuration for DeepSeek V4: ``<think>``/``</think>``
+"""DeepSeek V4 grammar parser: ``<think>``/``</think>``
 reasoning plus DSML tool calls in a single state machine.
 
 DeepSeek V4 output format::
@@ -32,6 +32,7 @@ immediately do not leak the tag into text content.
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING
 
 import regex as re
 
@@ -41,6 +42,11 @@ from vllm.grammar_parser.grammar_config import (
     ParserState,
     Transition,
 )
+from vllm.grammar_parser.unified_parser import GrammarParser
+
+if TYPE_CHECKING:
+    from vllm.tokenizers import TokenizerLike
+    from vllm.tool_parsers.abstract_tool_parser import Tool
 
 _DSML = "｜DSML｜"
 
@@ -172,3 +178,27 @@ def deepseek_v4_config() -> GrammarConfig:
         strip_trailing_quotes=False,
         tool_args_json=False,
     )
+
+
+class DeepSeekV4GrammarParser(GrammarParser):
+    """DeepSeek V4 parser: ``<think>``/``</think>`` reasoning +
+    DSML tool calls (``<｜DSML｜tool_calls>``/``<｜DSML｜invoke>``) in a
+    single state machine.
+
+    Initial state is CONTENT — the model generates ``<think>`` itself in
+    thinking mode; in chat mode the prompt pre-fills ``</think>`` so the
+    model outputs content directly.
+    """
+
+    def __init__(
+        self,
+        tokenizer: TokenizerLike,
+        tools: list[Tool] | None = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(
+            tokenizer,
+            tools,
+            grammar_config=deepseek_v4_config(),
+            **kwargs,
+        )

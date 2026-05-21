@@ -19,7 +19,7 @@ from tests.grammar_parser.streaming_helpers import (
 from vllm.entrypoints.openai.chat_completion.protocol import (
     ChatCompletionRequest,
 )
-from vllm.grammar_parser.grammars.qwen3 import (
+from vllm.grammar_parser.parsers.qwen3 import (
     TOOL_CALL_END,
     TOOL_CALL_START,
     qwen3xml_config,
@@ -524,7 +524,7 @@ class TestArgConverter:
     """Direct tests for the qwen3xml arg_converter with multi-line values."""
 
     def test_multiline_param_values(self):
-        from vllm.grammar_parser.grammars.qwen3 import (
+        from vllm.grammar_parser.parsers.qwen3 import (
             _qwen3xml_arg_converter,
         )
 
@@ -541,7 +541,7 @@ class TestArgConverter:
         assert result["description"] == "List files"
 
     def test_two_multiline_params(self):
-        from vllm.grammar_parser.grammars.qwen3 import (
+        from vllm.grammar_parser.parsers.qwen3 import (
             _qwen3xml_arg_converter,
         )
 
@@ -554,7 +554,7 @@ class TestArgConverter:
         assert result["b"] == "baz\nqux"
 
     def test_partial_multiline(self):
-        from vllm.grammar_parser.grammars.qwen3 import (
+        from vllm.grammar_parser.parsers.qwen3 import (
             _qwen3xml_arg_converter,
         )
 

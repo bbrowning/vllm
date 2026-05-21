@@ -23,11 +23,9 @@ from tests.grammar_parser.replay_harness import (
 from vllm.entrypoints.openai.chat_completion.protocol import (
     ChatCompletionRequest,
 )
-from vllm.grammar_parser.parsers import (
-    Gemma4GrammarParser,
-    NemotronV3GrammarParser,
-    Qwen3GrammarParser,
-)
+from vllm.grammar_parser.parsers.gemma4 import Gemma4GrammarParser
+from vllm.grammar_parser.parsers.nemotron_v3 import NemotronV3GrammarParser
+from vllm.grammar_parser.parsers.qwen3 import Qwen3GrammarParser
 
 CHUNK_SIZES = [1, 2, 3, 5, 10, 20, None]
 

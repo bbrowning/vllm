@@ -15,7 +15,7 @@ from tests.grammar_parser.streaming_helpers import (
 from vllm.entrypoints.openai.chat_completion.protocol import (
     ChatCompletionRequest,
 )
-from vllm.grammar_parser.grammars.hermes import hermes_config
+from vllm.grammar_parser.parsers.hermes import hermes_config
 from vllm.grammar_parser.unified_parser import GrammarParser
 
 _SPECIAL_DECODE = {100: "<tool_call>", 101: "</tool_call>"}

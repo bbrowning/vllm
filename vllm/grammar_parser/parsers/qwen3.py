@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Qwen3 grammar configurations for tool calls and reasoning.
+"""Qwen3 grammar parsers for tool calls and reasoning.
 
-Two configs are provided:
+Two parsers are provided:
 
-* ``qwen3xml_config()`` — tool calls only (XML ``<tool_call>`` format)
-* ``qwen3_config()`` — reasoning (``<think>``/``</think>``) **plus**
+* ``Qwen3XMLGrammarParser`` — tool calls only (XML ``<tool_call>`` format)
+* ``Qwen3GrammarParser`` — reasoning (``<think>``/``</think>``) **plus**
   tool calls in a single state machine.  Starts in REASONING state
   because Qwen3.5+ chat templates place ``<think>`` in the prompt.
 
@@ -24,6 +24,7 @@ The ``_qwen3xml_arg_converter`` parses these into a JSON object.
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING
 
 import regex as re
 
@@ -33,7 +34,12 @@ from vllm.grammar_parser.grammar_config import (
     ParserState,
     Transition,
 )
+from vllm.grammar_parser.unified_parser import GrammarParser
 from vllm.tool_parsers.utils import safe_literal_eval
+
+if TYPE_CHECKING:
+    from vllm.tokenizers import TokenizerLike
+    from vllm.tool_parsers.abstract_tool_parser import Tool
 
 TOOL_CALL_START = "<tool_call>"
 TOOL_CALL_END = "</tool_call>"
@@ -221,3 +227,57 @@ def qwen3_config() -> GrammarConfig:
         strip_trailing_quotes=False,
         tool_args_json=False,
     )
+
+
+class Qwen3GrammarParser(GrammarParser):
+    """Qwen3 parser: ``<think>``/``</think>`` reasoning +
+    ``<tool_call>`` XML tool calls in a single engine.
+
+    - Starts in REASONING state (Qwen3.5+ puts ``<think>`` in prompt)
+    - ``<tool_call>`` as implicit reasoning end
+    - Unpaired ``<tool_call>`` token ID detection for ``is_reasoning_end``
+    """
+
+    def __init__(
+        self,
+        tokenizer: TokenizerLike,
+        tools: list[Tool] | None = None,
+        **kwargs,
+    ) -> None:
+        kwargs.setdefault("grammar_config", qwen3_config())
+        super().__init__(
+            tokenizer,
+            tools,
+            **kwargs,
+        )
+        vocab = self.vocab
+        self._tool_call_token_id: int | None = vocab.get("<tool_call>")
+        self._tool_call_end_token_id: int | None = vocab.get("</tool_call>")
+
+    def is_reasoning_end(self, input_ids: list[int]) -> bool:
+        if super().is_reasoning_end(input_ids):
+            return True
+        tool_call_id = self._tool_call_token_id
+        tool_call_end_id = self._tool_call_end_token_id
+        if tool_call_id is not None:
+            for i in range(len(input_ids) - 1, -1, -1):
+                if input_ids[i] == tool_call_id:
+                    if tool_call_end_id is not None and any(
+                        input_ids[j] == tool_call_end_id
+                        for j in range(i + 1, len(input_ids))
+                    ):
+                        continue
+                    return True
+        return False
+
+
+class Qwen3XMLGrammarParser(GrammarParser):
+    """Qwen3 XML parser: ``<tool_call><function=...>`` tool calls."""
+
+    def __init__(
+        self,
+        tokenizer: TokenizerLike,
+        tools: list[Tool] | None = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(tokenizer, tools, grammar_config=qwen3xml_config(), **kwargs)

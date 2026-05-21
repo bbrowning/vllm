@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Grammar configuration for Hermes-style JSON tool call formats.
+"""Hermes grammar parser for JSON tool call formats.
 
 Hermes format::
 
@@ -18,6 +18,7 @@ by parameterizing the start/end tags.
 from __future__ import annotations
 
 import json
+from typing import TYPE_CHECKING
 
 from vllm.grammar_parser.events import EventType
 from vllm.grammar_parser.grammar_config import (
@@ -25,6 +26,11 @@ from vllm.grammar_parser.grammar_config import (
     ParserState,
     Transition,
 )
+from vllm.grammar_parser.unified_parser import GrammarParser
+
+if TYPE_CHECKING:
+    from vllm.tokenizers import TokenizerLike
+    from vllm.tool_parsers.abstract_tool_parser import Tool
 
 
 def _json_body_arg_converter(raw_args: str, partial: bool) -> str:
@@ -94,3 +100,15 @@ def hermes_config(
         arg_converter=_json_body_arg_converter,
         tool_args_json=False,
     )
+
+
+class HermesGrammarParser(GrammarParser):
+    """Hermes parser: ``<tool_call>``/``</tool_call>`` JSON tool calls."""
+
+    def __init__(
+        self,
+        tokenizer: TokenizerLike,
+        tools: list[Tool] | None = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(tokenizer, tools, grammar_config=hermes_config(), **kwargs)

@@ -24,31 +24,31 @@ _PARSERS_TO_REGISTER = {
 
 _GRAMMAR_PARSERS_TO_REGISTER = {
     "deepseek_v4_grammar": (
-        "vllm.grammar_parser.parsers",
+        "vllm.grammar_parser.parsers.deepseek_v4",
         "DeepSeekV4GrammarParser",
     ),
     "gemma4_grammar": (
-        "vllm.grammar_parser.parsers",
+        "vllm.grammar_parser.parsers.gemma4",
         "Gemma4GrammarParser",
     ),
     "qwen3_grammar": (
-        "vllm.grammar_parser.parsers",
+        "vllm.grammar_parser.parsers.qwen3",
         "Qwen3GrammarParser",
     ),
     "hermes_grammar": (
-        "vllm.grammar_parser.parsers",
+        "vllm.grammar_parser.parsers.hermes",
         "HermesGrammarParser",
     ),
     "qwen3_xml_grammar": (
-        "vllm.grammar_parser.parsers",
+        "vllm.grammar_parser.parsers.qwen3",
         "Qwen3XMLGrammarParser",
     ),
     "qwen3_coder_grammar": (
-        "vllm.grammar_parser.parsers",
+        "vllm.grammar_parser.parsers.qwen3",
         "Qwen3XMLGrammarParser",
     ),
     "nemotron_v3_grammar": (
-        "vllm.grammar_parser.parsers",
+        "vllm.grammar_parser.parsers.nemotron_v3",
         "NemotronV3GrammarParser",
     ),
 }

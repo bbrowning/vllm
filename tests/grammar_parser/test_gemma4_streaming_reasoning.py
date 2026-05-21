@@ -20,7 +20,7 @@ from vllm.entrypoints.openai.chat_completion.protocol import (
     ChatCompletionRequest,
 )
 from vllm.entrypoints.openai.engine.protocol import DeltaMessage
-from vllm.grammar_parser.parsers import Gemma4GrammarParser
+from vllm.grammar_parser.parsers.gemma4 import Gemma4GrammarParser
 
 # ── Special token IDs (arbitrary but consistent) ─────────────────────
 CHANNEL_START_ID = 50  # <|channel>
