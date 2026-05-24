@@ -94,7 +94,8 @@ class StreamingParserEngine:
         terminal_defs = terminals_from_literals(config.terminals)
         self._lexer = IncrementalLexer(terminal_defs, content_terminal="__CONTENT__")
 
-        self._args_buffer: list[str] = []
+        self._args_buffer: str = ""
+        self._args_safe_end: int = 0
         self._args_brace_depth = 0
         self._args_in_string = False
         self._args_escape_next = False
@@ -162,11 +163,12 @@ class StreamingParserEngine:
             events.append(
                 SemanticEvent(
                     EventType.ARG_VALUE_CHUNK,
-                    value="".join(self._args_buffer),
+                    value=self._args_buffer,
                     tool_index=self.tool_index,
                 )
             )
-            self._args_buffer = []
+            self._args_buffer = ""
+            self._args_safe_end = 0
 
         if self.state in (
             ParserState.TOOL_ARGS,
@@ -281,11 +283,12 @@ class StreamingParserEngine:
                 events.append(
                     SemanticEvent(
                         EventType.ARG_VALUE_CHUNK,
-                        value="".join(self._args_buffer),
+                        value=self._args_buffer,
                         tool_index=self.tool_index,
                     )
                 )
-                self._args_buffer = []
+                self._args_buffer = ""
+                self._args_safe_end = 0
             self._args_brace_depth = 0
             self._args_in_string = False
             self._args_escape_next = False
@@ -307,6 +310,7 @@ class StreamingParserEngine:
             self._args_brace_depth = 0
             self._args_in_string = False
             self._args_escape_next = False
+            self._args_safe_end = 0
 
         return events
 
@@ -324,80 +328,52 @@ class StreamingParserEngine:
 
     def _feed_args_char(self, ch: str) -> list[SemanticEvent]:
         """Process one character of argument content."""
-        self._args_buffer.append(ch)
+        self._args_buffer += ch
 
         if self._args_escape_next:
             self._args_escape_next = False
-            return self._try_flush_args()
+            self._args_safe_end = len(self._args_buffer)
+            return self._flush_safe_args()
 
         if self._args_in_string:
             if ch == "\\":
                 self._args_escape_next = True
             elif ch == '"':
                 self._args_in_string = False
-            return self._try_flush_args()
+            self._args_safe_end = len(self._args_buffer)
+            return self._flush_safe_args()
 
         if ch == '"':
             self._args_in_string = True
-            return self._try_flush_args()
+            self._args_safe_end = len(self._args_buffer)
+            return self._flush_safe_args()
 
         if ch in ("{", "["):
             self._args_brace_depth += 1
-            return self._try_flush_args()
+            self._args_safe_end = len(self._args_buffer)
+            return self._flush_safe_args()
 
         if ch in ("}", "]"):
             self._args_brace_depth -= 1
             if self._args_brace_depth <= 0:
                 return []
-            return self._try_flush_args()
+            self._args_safe_end = len(self._args_buffer)
+            return self._flush_safe_args()
 
-        return self._try_flush_args()
+        self._args_safe_end = len(self._args_buffer)
+        return self._flush_safe_args()
 
-    def _try_flush_args(self) -> list[SemanticEvent]:
-        """Flush safe argument characters from the buffer.
+    def _flush_safe_args(self) -> list[SemanticEvent]:
+        """Emit buffered argument characters up to the safe-end watermark.
 
-        Characters inside strings and non-final structural characters
-        are safe to emit.  Top-level closing braces are held back
-        until confirmed by a subsequent terminal.
+        Top-level closing braces are held back (safe_end not advanced)
+        until confirmed safe by a subsequent character or finish().
         """
-        buf = "".join(self._args_buffer)
-        safe_end = 0
-        depth = 0
-        in_str = False
-        escape = False
-
-        for i, ch in enumerate(buf):
-            if escape:
-                escape = False
-                safe_end = i + 1
-                continue
-            if in_str:
-                if ch == "\\":
-                    escape = True
-                elif ch == '"':
-                    in_str = False
-                safe_end = i + 1
-                continue
-            if ch == '"':
-                in_str = True
-                safe_end = i + 1
-            elif ch in ("{", "["):
-                depth += 1
-                safe_end = i + 1
-            elif ch in ("}", "]"):
-                depth -= 1
-                if depth > 0:
-                    safe_end = i + 1
-            else:
-                safe_end = i + 1
-
-        if safe_end == 0:
+        if self._args_safe_end == 0:
             return []
-
-        to_emit = buf[:safe_end]
-        remainder = buf[safe_end:]
-        self._args_buffer = [remainder] if remainder else []
-
+        to_emit = self._args_buffer[: self._args_safe_end]
+        self._args_buffer = self._args_buffer[self._args_safe_end :]
+        self._args_safe_end = 0
         return [
             SemanticEvent(
                 EventType.ARG_VALUE_CHUNK,
