@@ -25,6 +25,7 @@ from vllm.grammar_parser.parsers.deepseek_v4 import (
     DSML_THINK_START,
     DSML_TOOL_CALLS_END,
     DSML_TOOL_CALLS_START,
+    DeepSeekV4GrammarParser,
     _dsml_arg_converter,
     deepseek_v4_config,
 )
@@ -78,6 +79,13 @@ def mock_tokenizer():
 @pytest.fixture
 def parser(mock_tokenizer):
     return GrammarParser(mock_tokenizer, grammar_config=deepseek_v4_config())
+
+
+@pytest.fixture
+def thinking_parser(mock_tokenizer):
+    return DeepSeekV4GrammarParser(
+        mock_tokenizer, chat_template_kwargs={"thinking": True}
+    )
 
 
 @pytest.fixture
@@ -528,3 +536,94 @@ class TestStreamingReasoning:
         results = simulate_tool_streaming(parser, mock_request, chunks)
         name = collect_function_name(results)
         assert name == "get_weather"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Thinking-mode reasoning (initial state = REASONING)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestThinkingModeReasoning:
+    """When thinking is enabled the prompt pre-fills ``<think>``, so the
+    model output starts inside a reasoning block.  The parser must
+    classify text before ``</think>`` as reasoning, not content.
+    """
+
+    def test_non_streaming_reasoning_without_think_tags(
+        self, thinking_parser, mock_request
+    ):
+        text = "\n\nLet me think about this.\n</think>\nHere is the answer."
+        reasoning, content = thinking_parser.extract_reasoning(text, mock_request)
+        assert reasoning is not None
+        assert "Let me think" in reasoning
+        assert content is not None
+        assert "Here is the answer" in content
+
+    def test_non_streaming_all_reasoning_no_end_tag(
+        self, thinking_parser, mock_request
+    ):
+        text = "\n\nI'll review the PR and gather information."
+        reasoning, content = thinking_parser.extract_reasoning(text, mock_request)
+        assert reasoning is not None
+        assert "review the PR" in reasoning
+        assert content is None
+
+    def test_non_streaming_reasoning_then_tool_call(
+        self, thinking_parser, mock_request
+    ):
+        tool_text = _tool_section(
+            _invoke_block("get_weather", _param("city", "true", "Berlin"))
+        )
+        text = "\n\nI should check the weather.\n" + tool_text
+        reasoning, content = thinking_parser.extract_reasoning(text, mock_request)
+        assert reasoning is not None
+        assert "check the weather" in reasoning
+
+        result = thinking_parser.extract_tool_calls(text, mock_request)
+        assert result.tools_called is True
+        assert result.tool_calls[0].function.name == "get_weather"
+
+    def test_streaming_reasoning_without_think_tags(self, thinking_parser):
+        chunks = [
+            "\n\nLet me consider ",
+            "this carefully.\n",
+            "</think>\n",
+            "Here is the result.",
+        ]
+        reasoning, content = simulate_reasoning_streaming(thinking_parser, chunks)
+        assert "Let me consider" in reasoning
+        assert "Here is the result" in content
+
+    def test_streaming_all_reasoning_no_end_tag(self, thinking_parser):
+        chunks = ["I'll review ", "the PR."]
+        reasoning, content = simulate_reasoning_streaming(thinking_parser, chunks)
+        assert "review" in reasoning
+        assert "the PR" in reasoning
+        assert content == ""
+
+    def test_duplicate_think_start_absorbed(self, thinking_parser):
+        chunks = [
+            "<think>\n",
+            "Some reasoning.\n",
+            "</think>\n",
+            "Answer.",
+        ]
+        reasoning, content = simulate_reasoning_streaming(thinking_parser, chunks)
+        assert "Some reasoning" in reasoning
+        assert "Answer" in content
+
+    def test_chat_mode_parser_not_affected(self, parser, mock_request):
+        text = "The answer is 42."
+        reasoning, content = parser.extract_reasoning(text, mock_request)
+        assert reasoning is None
+        assert content == text
+
+    def test_enable_thinking_kwarg(self, mock_tokenizer):
+        p = DeepSeekV4GrammarParser(
+            mock_tokenizer, chat_template_kwargs={"enable_thinking": True}
+        )
+        assert p.grammar_config.initial_state.name == "REASONING"
+
+    def test_no_thinking_kwarg_defaults_to_content(self, mock_tokenizer):
+        p = DeepSeekV4GrammarParser(mock_tokenizer)
+        assert p.grammar_config.initial_state.name == "CONTENT"

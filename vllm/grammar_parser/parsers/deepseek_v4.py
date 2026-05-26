@@ -19,10 +19,11 @@ The ``string`` attribute on each parameter tag controls type coercion:
 ``string="true"`` keeps the value as a raw string; ``string="false"`` parses
 it as JSON (number, boolean, array, or object).
 
-Initial state is CONTENT because:
-- In thinking mode the model generates ``<think>`` itself as its first token.
-- In chat mode the prompt pre-fills ``</think>`` so the model starts outputting
-  content directly.
+Initial state depends on thinking mode:
+- In thinking mode the prompt pre-fills ``<think>``, so the model output
+  starts inside a reasoning block.  Initial state is REASONING.
+- In chat mode the prompt pre-fills ``</think>`` so the model starts
+  outputting content directly.  Initial state is CONTENT.
 
 A bare ``</think>`` in CONTENT state (no preceding ``<think>``) is silently
 absorbed so that models which suppress their thinking by emitting ``</think>``
@@ -98,11 +99,11 @@ def _dsml_arg_converter(raw_args: str, partial: bool) -> str:
     return json.dumps(params, ensure_ascii=False)
 
 
-def deepseek_v4_config() -> GrammarConfig:
+def deepseek_v4_config(thinking: bool = False) -> GrammarConfig:
     """Return the grammar config for DeepSeek V4 reasoning + tool calls."""
     return GrammarConfig(
         name="deepseek_v4",
-        initial_state=ParserState.CONTENT,
+        initial_state=ParserState.REASONING if thinking else ParserState.CONTENT,
         terminals={
             "THINK_START": DSML_THINK_START,
             "THINK_END": DSML_THINK_END,
@@ -185,9 +186,8 @@ class DeepSeekV4GrammarParser(GrammarParser):
     DSML tool calls (``<｜DSML｜tool_calls>``/``<｜DSML｜invoke>``) in a
     single state machine.
 
-    Initial state is CONTENT — the model generates ``<think>`` itself in
-    thinking mode; in chat mode the prompt pre-fills ``</think>`` so the
-    model outputs content directly.
+    Initial state is REASONING in thinking mode (the prompt pre-fills
+    ``<think>``); CONTENT otherwise (chat mode pre-fills ``</think>``).
     """
 
     def __init__(
@@ -196,9 +196,13 @@ class DeepSeekV4GrammarParser(GrammarParser):
         tools: list[Tool] | None = None,
         **kwargs,
     ) -> None:
+        chat_kwargs = kwargs.pop("chat_template_kwargs", None) or {}
+        thinking = bool(
+            chat_kwargs.get("thinking") or chat_kwargs.get("enable_thinking")
+        )
         super().__init__(
             tokenizer,
             tools,
-            grammar_config=deepseek_v4_config(),
+            grammar_config=deepseek_v4_config(thinking=thinking),
             **kwargs,
         )
