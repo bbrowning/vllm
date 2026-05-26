@@ -197,6 +197,8 @@ class GrammarParser(Parser):
         result = self._events_to_delta(events)
         if self._capture_deltas is not None and result is not None:
             self._capture_deltas.append(result)
+        if finished:
+            self.flush_capture()
         return result
 
     def flush_capture(self) -> None:
