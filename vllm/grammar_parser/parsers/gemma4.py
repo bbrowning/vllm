@@ -264,8 +264,10 @@ class Gemma4GrammarParser(GrammarParser):
                 return delta
             if len(self._reasoning_text) >= prefix_len:
                 self._prefix_stripped = True
-                delta.reasoning = ""
-                return delta
+                delta.reasoning = None
+                if delta.content is not None or delta.tool_calls:
+                    return delta
+                return None
             return None
 
         if _GEMMA4_THOUGHT_PREFIX.startswith(self._reasoning_text):
