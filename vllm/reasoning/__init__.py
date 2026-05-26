@@ -122,10 +122,26 @@ _REASONING_PARSERS_TO_REGISTER = {
     ),
 }
 
+_ADAPTER_MODULE = "vllm.grammar_parser.registered_adapters"
+
+_GRAMMAR_REASONING_ADAPTERS_TO_REGISTER = {
+    "deepseek_v4_grammar": (_ADAPTER_MODULE, "DeepSeekV4GrammarParserReasoningAdapter"),
+    "gemma4_grammar": (_ADAPTER_MODULE, "Gemma4GrammarParserReasoningAdapter"),
+    "qwen3_grammar": (_ADAPTER_MODULE, "Qwen3GrammarParserReasoningAdapter"),
+    "qwen3_xml_grammar": (_ADAPTER_MODULE, "Qwen3XMLGrammarParserReasoningAdapter"),
+    "qwen3_coder_grammar": (_ADAPTER_MODULE, "Qwen3XMLGrammarParserReasoningAdapter"),
+    "nemotron_v3_grammar": (_ADAPTER_MODULE, "NemotronV3GrammarParserReasoningAdapter"),
+}
+
 
 def register_lazy_reasoning_parsers():
     for name, (file_name, class_name) in _REASONING_PARSERS_TO_REGISTER.items():
         module_path = f"vllm.reasoning.{file_name}"
+        ReasoningParserManager.register_lazy_module(name, module_path, class_name)
+    for name, (
+        module_path,
+        class_name,
+    ) in _GRAMMAR_REASONING_ADAPTERS_TO_REGISTER.items():
         ReasoningParserManager.register_lazy_module(name, module_path, class_name)
 
 

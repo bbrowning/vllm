@@ -192,10 +192,23 @@ _TOOL_PARSERS_TO_REGISTER = {
     ),
 }
 
+_ADAPTER_MODULE = "vllm.grammar_parser.registered_adapters"
+
+_GRAMMAR_TOOL_ADAPTERS_TO_REGISTER = {
+    "deepseek_v4_grammar": (_ADAPTER_MODULE, "DeepSeekV4GrammarParserToolAdapter"),
+    "gemma4_grammar": (_ADAPTER_MODULE, "Gemma4GrammarParserToolAdapter"),
+    "qwen3_grammar": (_ADAPTER_MODULE, "Qwen3GrammarParserToolAdapter"),
+    "qwen3_xml_grammar": (_ADAPTER_MODULE, "Qwen3XMLGrammarParserToolAdapter"),
+    "qwen3_coder_grammar": (_ADAPTER_MODULE, "Qwen3XMLGrammarParserToolAdapter"),
+    "nemotron_v3_grammar": (_ADAPTER_MODULE, "NemotronV3GrammarParserToolAdapter"),
+}
+
 
 def register_lazy_tool_parsers():
     for name, (file_name, class_name) in _TOOL_PARSERS_TO_REGISTER.items():
         module_path = f"vllm.tool_parsers.{file_name}"
+        ToolParserManager.register_lazy_module(name, module_path, class_name)
+    for name, (module_path, class_name) in _GRAMMAR_TOOL_ADAPTERS_TO_REGISTER.items():
         ToolParserManager.register_lazy_module(name, module_path, class_name)
 
 
