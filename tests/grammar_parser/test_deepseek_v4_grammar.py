@@ -62,12 +62,14 @@ def _tool_section(*invokes: str) -> str:
 def mock_tokenizer():
     tok = MagicMock()
     tok.encode.return_value = [1, 2, 3]
-    tok.get_vocab.return_value = {
+    special_tokens = {
         DSML_THINK_START: _THINK_START_ID,
         DSML_THINK_END: _THINK_END_ID,
     }
+    tok.get_vocab.return_value = dict(special_tokens)
+    _id_to_text = {v: k for k, v in special_tokens.items()}
     tok.decode.side_effect = lambda ids: "".join(
-        chr(i) if i < 128 else f"<{i}>" for i in ids
+        _id_to_text.get(i, chr(i) if i < 128 else f"<{i}>") for i in ids
     )
     return tok
 

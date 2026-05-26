@@ -342,6 +342,8 @@ class GrammarParser(Parser):
         current_token_ids: Sequence[int],
         delta_token_ids: Sequence[int],
     ) -> DeltaMessage | None:
+        if not previous_text:
+            self._reset()
         events = self._engine.feed(delta_text, delta_token_ids)
         return self._events_to_delta(events)
 
