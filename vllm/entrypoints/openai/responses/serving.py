@@ -1362,6 +1362,47 @@ class OpenAIServingResponses(OpenAIServing):
             param="response_id",
         )
 
+    @staticmethod
+    def _split_delta(delta_message: DeltaMessage) -> list[DeltaMessage]:
+        """Split a compound delta into atomic deltas.
+
+        A single ``parse_delta`` call may return reasoning, content,
+        and multiple tool-call indices in one ``DeltaMessage``.  The
+        streaming-event state machine processes one state at a time, so
+        we split the delta so each component triggers its own
+        transition.
+        """
+        has_reasoning = delta_message.reasoning is not None
+        has_content = delta_message.content is not None
+        has_tools = bool(delta_message.tool_calls)
+        parts = int(has_reasoning) + int(has_content) + int(has_tools)
+
+        if parts <= 1 and (
+            not has_tools
+            or len(
+                {
+                    tc.index
+                    for tc in delta_message.tool_calls  # type: ignore[union-attr]
+                    if tc.index is not None
+                }
+            )
+            <= 1
+        ):
+            return [delta_message]
+
+        deltas: list[DeltaMessage] = []
+        if has_reasoning:
+            deltas.append(DeltaMessage(reasoning=delta_message.reasoning))
+        if has_content:
+            deltas.append(DeltaMessage(content=delta_message.content))
+        if has_tools:
+            groups: dict[int | None, list] = {}
+            for tc in delta_message.tool_calls:  # type: ignore[union-attr]
+                groups.setdefault(tc.index, []).append(tc)
+            for tcs in groups.values():
+                deltas.append(DeltaMessage(tool_calls=tcs))
+        return deltas or [delta_message]
+
     async def _process_simple_streaming_events(
         self,
         request: ResponsesRequest,
@@ -1415,18 +1456,25 @@ class OpenAIServingResponses(OpenAIServing):
             if not delta_message:
                 continue
 
-            target_state, tool_call = processor.resolve_target_state(delta_message)
-            if target_state == _StateType.NONE:
-                continue
+            # A single parser delta may carry multiple components
+            # (reasoning + content + tool_calls spanning multiple
+            # indices). Split into atomic deltas so the state machine
+            # transitions correctly between them.
+            deltas = self._split_delta(delta_message)
 
-            if processor.needs_transition(target_state, tool_call):
-                for event in processor.close_current():
-                    yield _increment_sequence_number_and_return(event)
-                for event in processor.open(target_state, tool_call):
-                    yield _increment_sequence_number_and_return(event)
+            for dm in deltas:
+                target_state, tool_call = processor.resolve_target_state(dm)
+                if target_state == _StateType.NONE:
+                    continue
 
-            for event in processor.emit_delta(delta_message, output, _get_logprobs):
-                yield _increment_sequence_number_and_return(event)
+                if processor.needs_transition(target_state, tool_call):
+                    for event in processor.close_current():
+                        yield _increment_sequence_number_and_return(event)
+                    for event in processor.open(target_state, tool_call):
+                        yield _increment_sequence_number_and_return(event)
+
+                for event in processor.emit_delta(dm, output, _get_logprobs):
+                    yield _increment_sequence_number_and_return(event)
 
         for event in processor.close_current():
             yield _increment_sequence_number_and_return(event)
