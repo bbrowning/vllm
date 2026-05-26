@@ -7,6 +7,7 @@ from vllm.config import ModelConfig
 from vllm.entrypoints.chat_utils import load_chat_template
 from vllm.entrypoints.openai.chat_completion.protocol import ChatCompletionRequest
 from vllm.renderers.hf import (
+    _consolidate_system_messages,
     _convert_developer_to_system,
     _detect_developer_role_support,
     _get_hf_base_chat_template_params,
@@ -784,3 +785,132 @@ class TestSafeApplyChatTemplateDeveloperRole:
         )
         assert "<|im_start|>system" in result
         assert "You are helpful." in result
+
+    def test_developer_at_non_first_position_consolidated(
+        self, model_config, tokenizer
+    ):
+        conversation = [
+            {"role": "system", "content": "You are helpful."},
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there!"},
+            {"role": "developer", "content": "Be concise."},
+            {"role": "user", "content": "What is 2+2?"},
+        ]
+        result = safe_apply_chat_template(
+            model_config,
+            tokenizer,
+            conversation,
+            chat_template=SYSTEM_FIRST_TEMPLATE,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+        assert "<|im_start|>system" in result
+        assert "You are helpful." in result
+        assert "Be concise." in result
+        assert "What is 2+2?" in result
+
+    def test_developer_only_no_prior_system(self, model_config, tokenizer):
+        conversation = [
+            {"role": "user", "content": "Hello"},
+            {"role": "developer", "content": "Be concise."},
+            {"role": "user", "content": "What is 2+2?"},
+        ]
+        result = safe_apply_chat_template(
+            model_config,
+            tokenizer,
+            conversation,
+            chat_template=SYSTEM_FIRST_TEMPLATE,
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+        assert "<|im_start|>system" in result
+        assert "Be concise." in result
+
+
+SYSTEM_FIRST_TEMPLATE = (
+    "{% for message in messages %}"
+    "{% if message['role'] == 'system' %}"
+    "{% if not loop.first %}"
+    "{{ raise_exception('System message must be at the beginning.') }}"
+    "{% endif %}"
+    "{{'<|im_start|>system\\n' + message['content'] + '<|im_end|>\\n'}}"
+    "{% elif message['role'] == 'user' %}"
+    "{{'<|im_start|>user\\n' + message['content'] + '<|im_end|>\\n'}}"
+    "{% elif message['role'] == 'assistant' %}"
+    "{{'<|im_start|>assistant\\n' + message['content'] + '<|im_end|>\\n'}}"
+    "{% else %}"
+    "{{ raise_exception('Unexpected message role: ' + message['role']) }}"
+    "{% endif %}"
+    "{% endfor %}"
+    "{% if add_generation_prompt %}"
+    "{{ '<|im_start|>assistant\\n' }}"
+    "{% endif %}"
+)
+
+
+class TestConsolidateSystemMessages:
+    def test_no_system_messages_unchanged(self):
+        conversation = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi"},
+        ]
+        result = _consolidate_system_messages(conversation)
+        assert result == conversation
+
+    def test_single_system_at_start_unchanged(self):
+        conversation = [
+            {"role": "system", "content": "You are helpful."},
+            {"role": "user", "content": "Hello"},
+        ]
+        result = _consolidate_system_messages(conversation)
+        assert result == conversation
+
+    def test_system_at_non_first_position_moved(self):
+        conversation = [
+            {"role": "user", "content": "Hello"},
+            {"role": "system", "content": "You are helpful."},
+        ]
+        result = _consolidate_system_messages(conversation)
+        assert result[0]["role"] == "system"
+        assert result[0]["content"] == "You are helpful."
+        assert result[1]["role"] == "user"
+        assert result[1]["content"] == "Hello"
+
+    def test_multiple_system_messages_merged(self):
+        conversation = [
+            {"role": "system", "content": "You are helpful."},
+            {"role": "user", "content": "Hello"},
+            {"role": "system", "content": "Be concise."},
+        ]
+        result = _consolidate_system_messages(conversation)
+        assert len(result) == 2
+        assert result[0]["role"] == "system"
+        assert result[0]["content"] == "You are helpful.\n\nBe concise."
+        assert result[1]["role"] == "user"
+
+    def test_list_content_handled(self):
+        conversation = [
+            {"role": "user", "content": "Hello"},
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "Rule 1."},
+                    {"type": "text", "text": "Rule 2."},
+                ],
+            },
+        ]
+        result = _consolidate_system_messages(conversation)
+        assert result[0]["role"] == "system"
+        assert result[0]["content"] == "Rule 1.\nRule 2."
+        assert result[1]["role"] == "user"
+
+    def test_does_not_mutate_original(self):
+        conversation = [
+            {"role": "user", "content": "Hello"},
+            {"role": "system", "content": "You are helpful."},
+        ]
+        original_len = len(conversation)
+        _consolidate_system_messages(conversation)
+        assert len(conversation) == original_len
+        assert conversation[0]["role"] == "user"
+        assert conversation[1]["role"] == "system"
