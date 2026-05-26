@@ -194,21 +194,11 @@ class TokenIDScanner:
                 results.append(terminal)
                 remaining = remaining[len(terminal.text) :]
             else:
-                # Text still arriving via SentencePiece holdback — re-defer.
-                if any(
-                    remaining.endswith(terminal.text[:k])
-                    for k in range(1, len(terminal.text))
-                ):
+                # Accumulate text until terminal text arrives —
+                # only the terminal provides a reliable split point.
+                if remaining:
                     self._deferred_post_text += remaining
                     remaining = ""
-                else:
-                    # Terminal text hasn't arrived yet.  Emit any
-                    # pending text so it is processed in the current
-                    # parser state (e.g. still REASONING) rather than
-                    # after a premature state transition.
-                    if remaining:
-                        results.append(TextChunk(remaining))
-                        remaining = ""
                 self._deferred_terminals.append(terminal)
 
         return results, remaining
