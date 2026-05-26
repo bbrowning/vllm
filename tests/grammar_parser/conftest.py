@@ -2,11 +2,8 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import pytest
-from transformers import AutoTokenizer
-
-from vllm.tokenizers import TokenizerLike
 
 
-@pytest.fixture(scope="module")
-def default_tokenizer() -> TokenizerLike:
-    return AutoTokenizer.from_pretrained("gpt2")
+@pytest.fixture()
+def should_do_global_cleanup_after_test() -> bool:
+    return False

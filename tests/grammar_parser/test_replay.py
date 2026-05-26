@@ -14,6 +14,7 @@ import dataclasses
 import pytest
 
 from tests.grammar_parser.replay_harness import (
+    assert_no_terminal_leakage,
     assert_parse_output,
     collect_output,
     load_samples,
@@ -41,32 +42,14 @@ _GEMMA4_TERMINALS = ["<|channel>", "<channel|>", "<|tool_call>", "<tool_call|>"]
 class TestGemma4Replay:
     """Replay Gemma4 token sequences at different chunk sizes."""
 
-    def test_parse_output(self, sample, chunk_size):
+    def test_replay(self, sample, chunk_size):
         tokenizer = make_mock_tokenizer(sample)
         parser = Gemma4GrammarParser(tokenizer)
         deltas = replay_streaming(parser, sample.tokens, chunk_size=chunk_size)
         output = collect_output(deltas)
+
         assert_parse_output(output, sample)
-
-    def test_no_terminal_leakage(self, sample, chunk_size):
-        """Terminal text must never appear in reasoning or content."""
-        tokenizer = make_mock_tokenizer(sample)
-        parser = Gemma4GrammarParser(tokenizer)
-        deltas = replay_streaming(parser, sample.tokens, chunk_size=chunk_size)
-        output = collect_output(deltas)
-
-        for terminal in _GEMMA4_TERMINALS:
-            assert terminal not in output.reasoning, (
-                f"{terminal!r} leaked into reasoning"
-            )
-            assert terminal not in output.content, f"{terminal!r} leaked into content"
-
-    def test_no_thought_prefix_leakage(self, sample, chunk_size):
-        """The ``thought\\n`` prefix must never appear in content."""
-        tokenizer = make_mock_tokenizer(sample)
-        parser = Gemma4GrammarParser(tokenizer)
-        deltas = replay_streaming(parser, sample.tokens, chunk_size=chunk_size)
-        output = collect_output(deltas)
+        assert_no_terminal_leakage(output, _GEMMA4_TERMINALS)
 
         assert "thought\n" not in output.content, (
             "'thought\\n' prefix leaked into content"
@@ -85,7 +68,7 @@ HOLDBACK_CONFIGS = [6, 12, 24]
 class TestGemma4ReplayWithHoldback:
     """Replay with simulated detokenizer holdback."""
 
-    def test_parse_output_with_holdback(self, sample, chunk_size, holdback):
+    def test_replay(self, sample, chunk_size, holdback):
         tokenizer = make_mock_tokenizer(sample)
         parser = Gemma4GrammarParser(tokenizer)
         deltas = replay_streaming(
@@ -95,28 +78,23 @@ class TestGemma4ReplayWithHoldback:
             holdback_chars=holdback,
         )
         output = collect_output(deltas)
-        assert_parse_output(output, sample)
 
-    def test_no_terminal_leakage_with_holdback(self, sample, chunk_size, holdback):
-        """Terminal text must never appear in content or reasoning under holdback."""
-        tokenizer = make_mock_tokenizer(sample)
-        parser = Gemma4GrammarParser(tokenizer)
-        deltas = replay_streaming(
-            parser,
-            sample.tokens,
-            chunk_size=chunk_size,
-            holdback_chars=holdback,
+        assert_parse_output(output, sample)
+        assert_no_terminal_leakage(
+            output,
+            _GEMMA4_TERMINALS,
+            context=f"chunk_size={chunk_size}, holdback={holdback}",
         )
-        output = collect_output(deltas)
-        for terminal in _GEMMA4_TERMINALS:
-            assert terminal not in output.content, (
-                f"{terminal!r} leaked into content "
-                f"(chunk_size={chunk_size}, holdback={holdback})"
-            )
-            assert terminal not in output.reasoning, (
-                f"{terminal!r} leaked into reasoning "
-                f"(chunk_size={chunk_size}, holdback={holdback})"
-            )
+
+
+_QWEN3_TERMINALS = [
+    "<think>",
+    "</think>",
+    "<tool_call>",
+    "</tool_call>",
+    "<function=",
+    "</function>",
+]
 
 
 @pytest.mark.parametrize("chunk_size", CHUNK_SIZES, ids=lambda c: f"chunk{c}")
@@ -124,32 +102,14 @@ class TestGemma4ReplayWithHoldback:
 class TestQwen3Replay:
     """Replay Qwen3 token sequences at different chunk sizes."""
 
-    def test_parse_output(self, sample, chunk_size):
+    def test_replay(self, sample, chunk_size):
         tokenizer = make_mock_tokenizer(sample)
         parser = Qwen3GrammarParser(tokenizer)
         deltas = replay_streaming(parser, sample.tokens, chunk_size=chunk_size)
         output = collect_output(deltas)
+
         assert_parse_output(output, sample)
-
-    def test_no_terminal_leakage(self, sample, chunk_size):
-        """Terminal text must never appear in reasoning or content."""
-        tokenizer = make_mock_tokenizer(sample)
-        parser = Qwen3GrammarParser(tokenizer)
-        deltas = replay_streaming(parser, sample.tokens, chunk_size=chunk_size)
-        output = collect_output(deltas)
-
-        for terminal in [
-            "<think>",
-            "</think>",
-            "<tool_call>",
-            "</tool_call>",
-            "<function=",
-            "</function>",
-        ]:
-            assert terminal not in output.reasoning, (
-                f"{terminal!r} leaked into reasoning"
-            )
-            assert terminal not in output.content, f"{terminal!r} leaked into content"
+        assert_no_terminal_leakage(output, _QWEN3_TERMINALS)
 
 
 @pytest.mark.parametrize("holdback", HOLDBACK_CONFIGS, ids=lambda h: f"holdback{h}")
@@ -158,7 +118,7 @@ class TestQwen3Replay:
 class TestQwen3ReplayWithHoldback:
     """Replay Qwen3 with simulated detokenizer holdback."""
 
-    def test_parse_output_with_holdback(self, sample, chunk_size, holdback):
+    def test_replay(self, sample, chunk_size, holdback):
         tokenizer = make_mock_tokenizer(sample)
         parser = Qwen3GrammarParser(tokenizer)
         deltas = replay_streaming(
@@ -168,7 +128,13 @@ class TestQwen3ReplayWithHoldback:
             holdback_chars=holdback,
         )
         output = collect_output(deltas)
+
         assert_parse_output(output, sample)
+        assert_no_terminal_leakage(
+            output,
+            _QWEN3_TERMINALS,
+            context=f"chunk_size={chunk_size}, holdback={holdback}",
+        )
 
 
 class TestGrammarParserAdjustRequest:
@@ -233,25 +199,14 @@ NEMOTRON_CHUNK_SIZES = [1, 2, 3, 5, 10, 19, 20, None]
 class TestNemotronV3Replay:
     """Replay Nemotron V3 token sequences at different chunk sizes."""
 
-    def test_parse_output(self, sample, chunk_size):
+    def test_replay(self, sample, chunk_size):
         tokenizer = make_mock_tokenizer(sample)
         parser = NemotronV3GrammarParser(tokenizer)
         deltas = replay_streaming(parser, sample.tokens, chunk_size=chunk_size)
         output = collect_output(deltas)
+
         assert_parse_output(output, sample)
-
-    def test_no_terminal_leakage(self, sample, chunk_size):
-        """Terminal text must never appear in reasoning or content."""
-        tokenizer = make_mock_tokenizer(sample)
-        parser = NemotronV3GrammarParser(tokenizer)
-        deltas = replay_streaming(parser, sample.tokens, chunk_size=chunk_size)
-        output = collect_output(deltas)
-
-        for terminal in _NEMOTRON_V3_TERMINALS:
-            assert terminal not in output.reasoning, (
-                f"{terminal!r} leaked into reasoning"
-            )
-            assert terminal not in output.content, f"{terminal!r} leaked into content"
+        assert_no_terminal_leakage(output, _NEMOTRON_V3_TERMINALS)
 
 
 class TestNemotronV3StreamInterval19:

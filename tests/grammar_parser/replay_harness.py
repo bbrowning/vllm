@@ -260,9 +260,6 @@ def assert_parse_output(actual: ParseOutput, sample: Sample) -> None:
             f"  expected: {sample.expected_content!r}\n"
             f"  actual:   {actual.content!r}"
         )
-    elif sample.expected_content is None and sample.expected_tool_calls:
-        pass
-
     if sample.expected_tool_calls is not None:
         assert len(actual.tool_calls) == len(sample.expected_tool_calls), (
             f"Tool call count mismatch: "
@@ -293,3 +290,19 @@ def assert_parse_output(actual: ParseOutput, sample: Sample) -> None:
                         f"  expected: {expected_args}\n"
                         f"  actual:   {actual_args}"
                     )
+
+
+def assert_no_terminal_leakage(
+    actual: ParseOutput,
+    terminals: list[str],
+    context: str = "",
+) -> None:
+    """Assert that none of *terminals* appear in reasoning or content."""
+    suffix = f" ({context})" if context else ""
+    for terminal in terminals:
+        assert terminal not in actual.reasoning, (
+            f"{terminal!r} leaked into reasoning{suffix}"
+        )
+        assert terminal not in actual.content, (
+            f"{terminal!r} leaked into content{suffix}"
+        )
