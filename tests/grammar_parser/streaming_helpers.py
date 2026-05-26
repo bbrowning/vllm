@@ -72,6 +72,17 @@ def collect_tool_arguments(
     return args_text
 
 
+def collect_content(
+    results: list[tuple[DeltaMessage | None, str]],
+) -> str:
+    """Concatenate all streamed content parts."""
+    parts: list[str] = []
+    for delta, _ in results:
+        if delta and delta.content:
+            parts.append(delta.content)
+    return "".join(parts)
+
+
 def collect_function_name(
     results: list[tuple[DeltaMessage | None, str]],
 ) -> str | None:

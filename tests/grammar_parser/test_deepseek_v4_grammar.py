@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from tests.grammar_parser.streaming_helpers import (
+    collect_content,
     collect_function_name,
     collect_tool_arguments,
     simulate_reasoning_streaming,
@@ -401,11 +402,7 @@ class TestStreamingToolCalls:
             DSML_TOOL_CALLS_END,
         ]
         results = simulate_tool_streaming(parser, mock_request, chunks)
-        content_parts = []
-        for delta, _ in results:
-            if delta and delta.content:
-                content_parts.append(delta.content)
-        assert "Let me check" in "".join(content_parts)
+        assert "Let me check" in collect_content(results)
 
     def test_streaming_whitespace_only_before_tool_calls(self, parser, mock_request):
         chunks = [
@@ -417,22 +414,14 @@ class TestStreamingToolCalls:
             DSML_TOOL_CALLS_END,
         ]
         results = simulate_tool_streaming(parser, mock_request, chunks)
-        content_parts = []
-        for delta, _ in results:
-            if delta and delta.content:
-                content_parts.append(delta.content)
-        assert "".join(content_parts) == ""
+        assert collect_content(results) == ""
         name = collect_function_name(results)
         assert name == "get_weather"
 
     def test_streaming_whitespace_flushed_with_real_content(self, parser, mock_request):
         chunks = ["\n\n", "Hello world"]
         results = simulate_tool_streaming(parser, mock_request, chunks)
-        content_parts = []
-        for delta, _ in results:
-            if delta and delta.content:
-                content_parts.append(delta.content)
-        assert "".join(content_parts) == "\n\nHello world"
+        assert collect_content(results) == "\n\nHello world"
 
     def test_streaming_value_split_across_chunks(self, parser, mock_request):
         chunks = [

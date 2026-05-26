@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from tests.grammar_parser.streaming_helpers import (
+    collect_content,
     collect_function_name,
     collect_tool_arguments,
     simulate_tool_streaming,
@@ -302,13 +303,7 @@ class TestStreaming:
         ]
 
         results = simulate_tool_streaming(parser, mock_request, chunks)
-
-        content_parts = []
-        for delta, _ in results:
-            if delta and delta.content:
-                content_parts.append(delta.content)
-
-        assert "".join(content_parts).strip().startswith("Let me check")
+        assert collect_content(results).strip().startswith("Let me check")
 
     def test_streaming_empty_args(self, parser, mock_request):
         chunks = [

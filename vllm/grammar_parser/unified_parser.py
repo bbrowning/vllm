@@ -541,7 +541,6 @@ class GrammarParser(Parser):
         tool_call_deltas: list[DeltaToolCall] = []
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
-        saw_tool_event = False
 
         if self._deferred_content:
             content_parts.append(self._deferred_content)
@@ -556,33 +555,30 @@ class GrammarParser(Parser):
                 case EventType.REASONING_END:
                     self._reasoning_ended = True
                 case EventType.TOOL_CALL_START:
-                    saw_tool_event = True
                     self._init_tool_slot(event)
                 case EventType.TOOL_NAME:
-                    saw_tool_event = True
                     self._handle_tool_name(event)
                 case EventType.ARG_VALUE_CHUNK:
-                    saw_tool_event = True
                     self._handle_arg_chunk(event, tool_call_deltas)
                 case EventType.TOOL_CALL_END:
-                    saw_tool_event = True
                     self._handle_tool_end(event, tool_call_deltas)
 
         content_str = "".join(content_parts)
+        stripped = content_str.strip() if content_str else ""
 
-        if saw_tool_event or self._tool_call_ids:
-            if not self._content_has_nonws and not content_str.strip():
+        if self._tool_call_ids:
+            if not self._content_has_nonws and not stripped:
                 content_str = ""
         elif (
             content_str
-            and not content_str.strip()
+            and not stripped
             and not self._content_has_nonws
             and not finished
         ):
             self._deferred_content = content_str
             content_str = ""
 
-        if content_str and content_str.strip():
+        if stripped:
             self._content_has_nonws = True
 
         content = content_str or None
