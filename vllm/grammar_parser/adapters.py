@@ -186,4 +186,8 @@ def make_adapters(
         (GrammarToolAdapter,),
         {"_grammar_cls": grammar_cls},
     )
+    # Let the serving layer find the adapters and call adjust_request(),
+    # which sets skip_special_tokens=False for the detokenizer.
+    grammar_cls.reasoning_parser_cls = reasoning_adapter  # type: ignore[attr-defined]
+    grammar_cls.tool_parser_cls = tool_adapter  # type: ignore[attr-defined]
     return reasoning_adapter, tool_adapter

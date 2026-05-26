@@ -26,6 +26,7 @@ from tests.grammar_parser.replay_harness import (
 from vllm.grammar_parser.parsers.gemma4 import Gemma4GrammarParser
 from vllm.grammar_parser.parsers.nemotron_v3 import NemotronV3GrammarParser
 from vllm.grammar_parser.parsers.qwen3 import Qwen3GrammarParser
+from vllm.parser import _GRAMMAR_PARSERS_TO_REGISTER, ParserManager
 
 CHUNK_SIZES = [1, 2, 3, 5, 10, 20, None]
 
@@ -315,3 +316,21 @@ class TestNemotronV3DeferralFinish:
             sample, expected_reasoning=None, expected_content=None
         )
         assert_parse_output(output, tool_calls_only)
+
+
+class TestAdapterReferences:
+    """Verify make_adapters sets reasoning/tool parser class refs on grammar
+    parser classes so the serving layer finds them and calls adjust_request."""
+
+    @pytest.mark.parametrize(
+        "parser_name",
+        list(_GRAMMAR_PARSERS_TO_REGISTER.keys()),
+    )
+    def test_adapter_cls_refs_set(self, parser_name):
+        parser_cls = ParserManager.get_parser_internal(parser_name)
+        assert parser_cls.reasoning_parser_cls is not None, (
+            f"{parser_name}: reasoning_parser_cls is None"
+        )
+        assert parser_cls.tool_parser_cls is not None, (
+            f"{parser_name}: tool_parser_cls is None"
+        )
