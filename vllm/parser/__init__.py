@@ -35,10 +35,6 @@ _GRAMMAR_PARSERS_TO_REGISTER = {
         "vllm.grammar_parser.parsers.qwen3",
         "Qwen3GrammarParser",
     ),
-    "hermes_grammar": (
-        "vllm.grammar_parser.parsers.hermes",
-        "HermesGrammarParser",
-    ),
     "qwen3_xml_grammar": (
         "vllm.grammar_parser.parsers.qwen3",
         "Qwen3XMLGrammarParser",

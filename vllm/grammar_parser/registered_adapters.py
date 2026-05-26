@@ -10,7 +10,6 @@ names so that :class:`ReasoningParserManager` and
 from vllm.grammar_parser.adapters import make_adapters
 from vllm.grammar_parser.parsers.deepseek_v4 import DeepSeekV4GrammarParser
 from vllm.grammar_parser.parsers.gemma4 import Gemma4GrammarParser
-from vllm.grammar_parser.parsers.hermes import HermesGrammarParser
 from vllm.grammar_parser.parsers.nemotron_v3 import NemotronV3GrammarParser
 from vllm.grammar_parser.parsers.qwen3 import (
     Qwen3GrammarParser,
@@ -31,11 +30,6 @@ from vllm.grammar_parser.parsers.qwen3 import (
     Qwen3GrammarParserReasoningAdapter,
     Qwen3GrammarParserToolAdapter,
 ) = make_adapters(Qwen3GrammarParser)
-
-(
-    HermesGrammarParserReasoningAdapter,
-    HermesGrammarParserToolAdapter,
-) = make_adapters(HermesGrammarParser)
 
 (
     NemotronV3GrammarParserReasoningAdapter,

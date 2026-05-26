@@ -11,7 +11,6 @@ from vllm.grammar_parser.grammar_config import (
     Transition,
 )
 from vllm.grammar_parser.parser_engine import StreamingParserEngine
-from vllm.grammar_parser.parsers.hermes import hermes_config
 
 
 def _hermes_config() -> GrammarConfig:
@@ -19,6 +18,10 @@ def _hermes_config() -> GrammarConfig:
     return GrammarConfig(
         name="hermes_test",
         terminals={
+            "TOOL_START": "<tool_call>",
+            "TOOL_END": "</tool_call>",
+        },
+        token_id_terminals={
             "TOOL_START": "<tool_call>",
             "TOOL_END": "</tool_call>",
         },
@@ -31,6 +34,10 @@ def _hermes_config() -> GrammarConfig:
                 ParserState.CONTENT,
                 [EventType.TOOL_CALL_END],
             ),
+        },
+        content_events={
+            ParserState.CONTENT: EventType.TEXT_CHUNK,
+            ParserState.TOOL_ARGS: EventType.ARG_VALUE_CHUNK,
         },
     )
 
@@ -339,7 +346,7 @@ class TestTokenIdFiltering:
     def test_lex_matched_terminal_demoted_after_token_ids_seen(self):
         """After receiving token IDs, text that matches a token-ID
         terminal should be treated as content, not trigger a transition."""
-        engine = StreamingParserEngine(hermes_config(), _make_hermes_tokenizer())
+        engine = StreamingParserEngine(_hermes_config(), _make_hermes_tokenizer())
 
         # First feed with a non-special token ID to set _ever_had_token_ids
         engine.feed("prefix ", [1])
@@ -360,7 +367,7 @@ class TestTokenIdFiltering:
     def test_scanner_matched_terminal_bypasses_filter(self):
         """PreLexedTerminals from the scanner bypass the filter and
         still trigger state transitions."""
-        engine = StreamingParserEngine(hermes_config(), _make_hermes_tokenizer())
+        engine = StreamingParserEngine(_hermes_config(), _make_hermes_tokenizer())
 
         events = engine.feed("<tool_call>", [_TOOL_START_ID])
         assert any(e.type == EventType.TOOL_CALL_START for e in events)
@@ -373,7 +380,7 @@ class TestTokenIdFiltering:
     def test_no_filtering_without_token_ids(self):
         """When no token IDs are ever provided (non-streaming),
         text matching still triggers transitions."""
-        engine = StreamingParserEngine(hermes_config(), _make_hermes_tokenizer())
+        engine = StreamingParserEngine(_hermes_config(), _make_hermes_tokenizer())
 
         events = engine.feed('<tool_call>{"name": "f"}</tool_call>', [])
         events.extend(engine.finish())
@@ -385,7 +392,7 @@ class TestTokenIdFiltering:
     def test_mixed_text_then_real_tool_call(self):
         """Text mentioning tool syntax followed by a real special-token
         tool call."""
-        engine = StreamingParserEngine(hermes_config(), _make_hermes_tokenizer())
+        engine = StreamingParserEngine(_hermes_config(), _make_hermes_tokenizer())
 
         events1 = engine.feed("Mention <tool_call> in text. ", [1, 2, 3, 4])
         events2 = engine.feed("<tool_call>", [_TOOL_START_ID])
