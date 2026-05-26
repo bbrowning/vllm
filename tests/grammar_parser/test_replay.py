@@ -14,15 +14,14 @@ import dataclasses
 import pytest
 
 from tests.grammar_parser.replay_harness import (
+    _test_request,
     assert_no_terminal_leakage,
     assert_parse_output,
     collect_output,
     load_samples,
     make_mock_tokenizer,
     replay_streaming,
-)
-from vllm.entrypoints.openai.chat_completion.protocol import (
-    ChatCompletionRequest,
+    replay_with_text_holdback,
 )
 from vllm.grammar_parser.parsers.gemma4 import Gemma4GrammarParser
 from vllm.grammar_parser.parsers.nemotron_v3 import NemotronV3GrammarParser
@@ -137,6 +136,33 @@ class TestQwen3ReplayWithHoldback:
         )
 
 
+TEXT_HOLDBACK_DELAYS = [1, 2, 3]
+
+
+@pytest.mark.parametrize("delay", TEXT_HOLDBACK_DELAYS, ids=lambda d: f"delay{d}")
+@pytest.mark.parametrize("sample", _gemma4_samples, ids=lambda s: s.id)
+class TestGemma4TextHoldback:
+    """Replay with production-like text/token-ID misalignment.
+
+    In production the detokenizer sends token IDs immediately but holds
+    back text by N tokens.  This exercises the TokenIDScanner deferred
+    terminal path that aligned-holdback tests do not cover.
+    """
+
+    def test_replay(self, sample, delay):
+        tokenizer = make_mock_tokenizer(sample)
+        parser = Gemma4GrammarParser(tokenizer)
+        deltas = replay_with_text_holdback(parser, sample.tokens, text_delay=delay)
+        output = collect_output(deltas)
+
+        assert_parse_output(output, sample)
+        assert_no_terminal_leakage(
+            output,
+            _GEMMA4_TERMINALS,
+            context=f"text_delay={delay}",
+        )
+
+
 class TestGrammarParserAdjustRequest:
     """Verify GrammarParser and its adapters set skip_special_tokens=False."""
 
@@ -144,10 +170,7 @@ class TestGrammarParserAdjustRequest:
         sample = _gemma4_samples[0]
         tokenizer = make_mock_tokenizer(sample)
         parser = Gemma4GrammarParser(tokenizer)
-        request = ChatCompletionRequest(
-            model="test-model",
-            messages=[{"role": "user", "content": "test"}],
-        )
+        request = _test_request()
         assert request.skip_special_tokens is True
         adjusted = parser.adjust_request(request)
         assert adjusted.skip_special_tokens is False
@@ -175,10 +198,7 @@ class TestGrammarParserAdjustRequest:
             {"_grammar_cls": NemotronV3GrammarParser},
         )
         adapter = adapter_cls(tokenizer)
-        request = ChatCompletionRequest(
-            model="test-model",
-            messages=[{"role": "user", "content": "test"}],
-        )
+        request = _test_request()
         assert request.skip_special_tokens is True
         adjusted = adapter.adjust_request(request)
         assert adjusted.skip_special_tokens is False
@@ -261,10 +281,7 @@ class TestNemotronV3DeferralFinish:
         tokenizer = make_mock_tokenizer(sample)
         parser = NemotronV3GrammarParser(tokenizer)
 
-        request = ChatCompletionRequest(
-            model="test-model",
-            messages=[{"role": "user", "content": "test"}],
-        )
+        request = _test_request()
 
         all_ids = [tid for tid, _ in sample.tokens]
         all_texts = [text for _, text in sample.tokens]

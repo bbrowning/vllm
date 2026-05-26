@@ -104,6 +104,13 @@ def _inv_special(vocab: dict[str, int]) -> set[int]:
     return set(vocab.values())
 
 
+def _test_request() -> ChatCompletionRequest:
+    return ChatCompletionRequest(
+        model="test-model",
+        messages=[{"role": "user", "content": "test"}],
+    )
+
+
 def replay_streaming(
     parser,
     tokens: list[tuple[int, str]],
@@ -132,10 +139,7 @@ def replay_streaming(
     all_ids = [tid for tid, _ in tokens]
     all_texts = [text for _, text in tokens]
 
-    request = ChatCompletionRequest(
-        model="test-model",
-        messages=[{"role": "user", "content": "test"}],
-    )
+    request = _test_request()
 
     if holdback_chars <= 0:
         chunks = list(range(0, len(tokens), chunk_size))
@@ -197,6 +201,56 @@ def replay_streaming(
             request,
             prompt_token_ids=[] if is_first else None,
             finished=finished_on_last,
+        )
+        results.append(result)
+
+    return results
+
+
+def replay_with_text_holdback(
+    parser,
+    tokens: list[tuple[int, str]],
+    text_delay: int = 1,
+) -> list[DeltaMessage | None]:
+    """Replay token-by-token with text arriving *text_delay* steps late.
+
+    Simulates the production detokenizer holdback where token IDs arrive
+    immediately but decoded text is delayed.  On the last token all
+    remaining held-back text is flushed, matching real server behavior::
+
+        step 0:   ids=[tok0], text=""               (held back)
+        step 1:   ids=[tok1], text=tok0_text         (tok0 released)
+        ...
+        step N-1: ids=[tokN-1], text=remaining_texts (flush all)
+
+    This exercises the TokenIDScanner deferred-terminal path that
+    ``replay_streaming`` (which keeps text and IDs aligned) does not.
+    """
+    results: list[DeltaMessage | None] = []
+    request = _test_request()
+
+    n = len(tokens)
+    held_texts: list[str] = []
+
+    for i in range(n):
+        token_id = tokens[i][0]
+        held_texts.append(tokens[i][1])
+
+        is_last = i == n - 1
+        if is_last:
+            delta_text = "".join(held_texts)
+            held_texts.clear()
+        elif len(held_texts) > text_delay:
+            delta_text = held_texts.pop(0)
+        else:
+            delta_text = ""
+
+        result = parser.parse_delta(
+            delta_text,
+            [token_id],
+            request,
+            prompt_token_ids=[] if i == 0 else None,
+            finished=is_last,
         )
         results.append(result)
 

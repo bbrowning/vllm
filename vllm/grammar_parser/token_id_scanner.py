@@ -201,9 +201,15 @@ class TokenIDScanner:
                 ):
                     self._deferred_post_text += remaining
                     remaining = ""
-                    self._deferred_terminals.append(terminal)
                 else:
-                    results.append(terminal)
+                    # Terminal text hasn't arrived yet.  Emit any
+                    # pending text so it is processed in the current
+                    # parser state (e.g. still REASONING) rather than
+                    # after a premature state transition.
+                    if remaining:
+                        results.append(TextChunk(remaining))
+                        remaining = ""
+                self._deferred_terminals.append(terminal)
 
         return results, remaining
 
