@@ -450,6 +450,26 @@ def _detect_content_format(
         return "openai"
 
 
+@lru_cache(maxsize=32)
+def _detect_developer_role_support(chat_template: str) -> bool:
+    return '"developer"' in chat_template or "'developer'" in chat_template
+
+
+def _convert_developer_to_system(
+    conversation: list[ConversationMessage],
+) -> list[ConversationMessage]:
+    converted: list[ConversationMessage] = []
+    for msg in conversation:
+        if msg["role"] == "developer":
+            new_msg = dict(msg)
+            new_msg["role"] = "system"
+            new_msg.pop("tools", None)
+            converted.append(new_msg)  # type: ignore[arg-type]
+        else:
+            converted.append(msg)
+    return converted
+
+
 def _resolve_chat_template_content_format(
     chat_template: str | None,
     tools: list[dict[str, Any]] | None,
@@ -652,6 +672,15 @@ def safe_apply_chat_template(
             "As of transformers v4.44, default chat template is no longer "
             "allowed, so you must provide a chat template if the tokenizer "
             "does not define one."
+        )
+
+    if any(
+        msg["role"] == "developer" for msg in conversation
+    ) and not _detect_developer_role_support(chat_template):
+        conversation = _convert_developer_to_system(conversation)
+        logger.info_once(
+            "Chat template does not support the 'developer' message role. "
+            "Converting developer messages to 'system' role.",
         )
 
     resolved_kwargs = resolve_chat_template_kwargs(
