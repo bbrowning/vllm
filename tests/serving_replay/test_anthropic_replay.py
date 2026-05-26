@@ -31,7 +31,11 @@ from vllm.entrypoints.openai.chat_completion.protocol import (
 )
 from vllm.entrypoints.openai.engine.protocol import RequestResponseMetadata
 
-_all_samples = load_serving_samples("qwen3") + load_serving_samples("gemma4")
+_all_samples = (
+    load_serving_samples("qwen3")
+    + load_serving_samples("gemma4")
+    + load_serving_samples("deepseek_v4")
+)
 
 
 def _build_request(sample, *, stream: bool = True) -> ChatCompletionRequest:

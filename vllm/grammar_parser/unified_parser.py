@@ -78,6 +78,8 @@ class GrammarParser(Parser):
         self._tool_args: list[str] = []
         self._name_sent: list[bool] = []
         self._streamed_json: list[str] = []
+        self._deferred_content: str = ""
+        self._content_has_nonws: bool = False
 
         self._capture_tokens: list[list] | None = [] if _DUMP_PATH else None
         self._capture_deltas: list[DeltaMessage] | None = [] if _DUMP_PATH else None
@@ -129,6 +131,8 @@ class GrammarParser(Parser):
         self._tool_args.clear()
         self._name_sent.clear()
         self._streamed_json.clear()
+        self._deferred_content = ""
+        self._content_has_nonws = False
         self._stream_state = StreamState()
 
     def adjust_request(
@@ -194,7 +198,7 @@ class GrammarParser(Parser):
         events = self._engine.feed(delta_text, delta_token_ids)
         if finished:
             events.extend(self._engine.finish())
-        result = self._events_to_delta(events)
+        result = self._events_to_delta(events, finished=finished)
         if self._capture_deltas is not None and result is not None:
             self._capture_deltas.append(result)
         if finished:
@@ -298,7 +302,10 @@ class GrammarParser(Parser):
                     tc["arguments"] = json.loads(args_str)
 
         reasoning = "".join(reasoning_parts) or None
-        content = "".join(content_parts) or None
+        content_str = "".join(content_parts)
+        if tool_calls:
+            content_str = content_str.strip()
+        content = content_str or None
         return {
             "reasoning": reasoning,
             "content": content,
@@ -529,10 +536,16 @@ class GrammarParser(Parser):
     def _events_to_delta(
         self,
         events: list[SemanticEvent],
+        finished: bool = False,
     ) -> DeltaMessage | None:
         tool_call_deltas: list[DeltaToolCall] = []
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
+        saw_tool_event = False
+
+        if self._deferred_content:
+            content_parts.append(self._deferred_content)
+            self._deferred_content = ""
 
         for event in events:
             match event.type:
@@ -543,15 +556,36 @@ class GrammarParser(Parser):
                 case EventType.REASONING_END:
                     self._reasoning_ended = True
                 case EventType.TOOL_CALL_START:
+                    saw_tool_event = True
                     self._init_tool_slot(event)
                 case EventType.TOOL_NAME:
+                    saw_tool_event = True
                     self._handle_tool_name(event)
                 case EventType.ARG_VALUE_CHUNK:
+                    saw_tool_event = True
                     self._handle_arg_chunk(event, tool_call_deltas)
                 case EventType.TOOL_CALL_END:
+                    saw_tool_event = True
                     self._handle_tool_end(event, tool_call_deltas)
 
-        content = "".join(content_parts) or None
+        content_str = "".join(content_parts)
+
+        if saw_tool_event or self._tool_call_ids:
+            if not self._content_has_nonws and not content_str.strip():
+                content_str = ""
+        elif (
+            content_str
+            and not content_str.strip()
+            and not self._content_has_nonws
+            and not finished
+        ):
+            self._deferred_content = content_str
+            content_str = ""
+
+        if content_str and content_str.strip():
+            self._content_has_nonws = True
+
+        content = content_str or None
         reasoning = "".join(reasoning_parts) or None
 
         if content or tool_call_deltas or reasoning:

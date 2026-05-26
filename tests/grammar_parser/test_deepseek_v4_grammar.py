@@ -270,6 +270,13 @@ class TestNonStreamingToolCalls:
         assert result.content is not None
         assert "Let me look that up" in result.content
 
+    def test_whitespace_only_content_before_tool_calls(self, parser, mock_request):
+        inv = _invoke_block("get_weather", _param("city", "true", "Dallas"))
+        text = "\n\n" + _tool_section(inv)
+        result = parser.extract_tool_calls(text, mock_request)
+        assert result.tools_called is True
+        assert result.content is None
+
     def test_chinese_param_value(self, parser, mock_request):
         text = _tool_section(
             _invoke_block("get_weather", _param("city", "true", "杭州"))
@@ -399,6 +406,33 @@ class TestStreamingToolCalls:
             if delta and delta.content:
                 content_parts.append(delta.content)
         assert "Let me check" in "".join(content_parts)
+
+    def test_streaming_whitespace_only_before_tool_calls(self, parser, mock_request):
+        chunks = [
+            "\n\n",
+            DSML_TOOL_CALLS_START + "\n",
+            DSML_INVOKE_PREFIX + "get_weather" + DSML_INVOKE_NAME_END + "\n",
+            _param("city", "true", "Dallas") + "\n",
+            DSML_INVOKE_END + "\n",
+            DSML_TOOL_CALLS_END,
+        ]
+        results = simulate_tool_streaming(parser, mock_request, chunks)
+        content_parts = []
+        for delta, _ in results:
+            if delta and delta.content:
+                content_parts.append(delta.content)
+        assert "".join(content_parts) == ""
+        name = collect_function_name(results)
+        assert name == "get_weather"
+
+    def test_streaming_whitespace_flushed_with_real_content(self, parser, mock_request):
+        chunks = ["\n\n", "Hello world"]
+        results = simulate_tool_streaming(parser, mock_request, chunks)
+        content_parts = []
+        for delta, _ in results:
+            if delta and delta.content:
+                content_parts.append(delta.content)
+        assert "".join(content_parts) == "\n\nHello world"
 
     def test_streaming_value_split_across_chunks(self, parser, mock_request):
         chunks = [

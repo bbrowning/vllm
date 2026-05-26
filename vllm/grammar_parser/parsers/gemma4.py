@@ -241,8 +241,9 @@ class Gemma4GrammarParser(GrammarParser):
     def _events_to_delta(
         self,
         events: list[SemanticEvent],
+        finished: bool = False,
     ) -> DeltaMessage | None:
-        delta = super()._events_to_delta(events)
+        delta = super()._events_to_delta(events, finished=finished)
         if delta is None or delta.reasoning is None:
             return delta
 

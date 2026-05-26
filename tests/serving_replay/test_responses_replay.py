@@ -26,7 +26,11 @@ from vllm.entrypoints.openai.responses.context import SimpleContext
 from vllm.entrypoints.openai.responses.protocol import ResponsesRequest
 from vllm.sampling_params import SamplingParams
 
-_all_samples = load_serving_samples("qwen3") + load_serving_samples("gemma4")
+_all_samples = (
+    load_serving_samples("qwen3")
+    + load_serving_samples("gemma4")
+    + load_serving_samples("deepseek_v4")
+)
 
 
 def _build_responses_request(sample) -> ResponsesRequest:
