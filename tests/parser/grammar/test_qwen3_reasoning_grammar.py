@@ -13,8 +13,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from tests.grammar_parser.streaming_helpers import simulate_reasoning_streaming
-from vllm.grammar_parser.parsers.qwen3 import Qwen3GrammarParser
+from tests.parser.grammar.streaming_helpers import simulate_reasoning_streaming
+from vllm.parser.grammar.parsers.qwen3 import Qwen3GrammarParser
 
 _THINK_START_ID = 50
 _THINK_END_ID = 51

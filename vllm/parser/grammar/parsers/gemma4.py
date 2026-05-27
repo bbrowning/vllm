@@ -28,13 +28,13 @@ import json
 from typing import TYPE_CHECKING
 
 from vllm.entrypoints.openai.engine.protocol import DeltaMessage
-from vllm.grammar_parser.events import EventType, SemanticEvent
-from vllm.grammar_parser.grammar_config import (
+from vllm.parser.grammar.events import EventType, SemanticEvent
+from vllm.parser.grammar.grammar_config import (
     GrammarConfig,
     ParserState,
     Transition,
 )
-from vllm.grammar_parser.unified_parser import GrammarParser
+from vllm.parser.grammar.unified_parser import GrammarParser
 from vllm.tool_parsers.gemma4_tool_parser import (
     _parse_gemma4_args,
 )

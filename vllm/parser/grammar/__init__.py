@@ -10,11 +10,11 @@ and transitions) and a shared incremental engine handles streaming,
 ambiguity buffering, token-ID mapping, and delta computation.
 """
 
-from vllm.grammar_parser.events import EventType, SemanticEvent
-from vllm.grammar_parser.parsers.deepseek_v4 import DeepSeekV4GrammarParser
-from vllm.grammar_parser.parsers.gemma4 import Gemma4GrammarParser
-from vllm.grammar_parser.parsers.nemotron_v3 import NemotronV3GrammarParser
-from vllm.grammar_parser.parsers.qwen3 import (
+from vllm.parser.grammar.events import EventType, SemanticEvent
+from vllm.parser.grammar.parsers.deepseek_v4 import DeepSeekV4GrammarParser
+from vllm.parser.grammar.parsers.gemma4 import Gemma4GrammarParser
+from vllm.parser.grammar.parsers.nemotron_v3 import NemotronV3GrammarParser
+from vllm.parser.grammar.parsers.qwen3 import (
     Qwen3GrammarParser,
     Qwen3XMLGrammarParser,
 )

@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 # Re-use the mock tokenizer builder from the grammar parser tests.
-from tests.grammar_parser.replay_harness import (
+from tests.parser.grammar.replay_harness import (
     make_mock_tokenizer as _make_mock_tokenizer,
 )
 from vllm.entrypoints.openai.responses.context import SimpleContext
@@ -24,7 +24,7 @@ from vllm.outputs import CompletionOutput, RequestOutput
 from vllm.parser import ParserManager
 from vllm.parser.abstract_parser import Parser
 
-DATA_DIR = Path(__file__).parent.parent / "grammar_parser" / "data"
+DATA_DIR = Path(__file__).parent.parent / "parser" / "grammar" / "data"
 
 CHUNK_SIZES = [1, 2, 3, 5, 11, 23, None]
 
@@ -56,7 +56,7 @@ class ServingSample:
 
 def load_serving_samples(model: str) -> list[ServingSample]:
     """Load all samples with ``serving`` section from
-    ``tests/grammar_parser/data/{model}.jsonl``."""
+    ``tests/parser/grammar/data/{model}.jsonl``."""
     path = DATA_DIR / f"{model}.jsonl"
     if not path.exists():
         return []
@@ -98,7 +98,7 @@ def make_mock_tokenizer(sample: ServingSample):
 
     Delegates to the grammar parser test harness's ``make_mock_tokenizer``.
     """
-    from tests.grammar_parser.replay_harness import Sample as GrammarSample
+    from tests.parser.grammar.replay_harness import Sample as GrammarSample
 
     grammar_sample = GrammarSample(
         id=sample.id,

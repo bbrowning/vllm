@@ -31,11 +31,11 @@ from vllm.entrypoints.openai.engine.protocol import (
     FunctionCall,
     ToolCall,
 )
-from vllm.grammar_parser.events import EventType, SemanticEvent
-from vllm.grammar_parser.grammar_config import GrammarConfig, ParserState
-from vllm.grammar_parser.parser_engine import StreamingParserEngine
 from vllm.logger import init_logger
 from vllm.parser.abstract_parser import Parser, StreamState
+from vllm.parser.grammar.events import EventType, SemanticEvent
+from vllm.parser.grammar.grammar_config import GrammarConfig, ParserState
+from vllm.parser.grammar.parser_engine import StreamingParserEngine
 from vllm.tool_parsers.utils import find_tool_properties
 
 if TYPE_CHECKING:

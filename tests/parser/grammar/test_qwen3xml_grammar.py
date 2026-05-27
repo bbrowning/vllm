@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from tests.grammar_parser.streaming_helpers import (
+from tests.parser.grammar.streaming_helpers import (
     collect_content,
     collect_function_name,
     collect_tool_arguments,
@@ -20,12 +20,12 @@ from tests.grammar_parser.streaming_helpers import (
 from vllm.entrypoints.openai.chat_completion.protocol import (
     ChatCompletionRequest,
 )
-from vllm.grammar_parser.parsers.qwen3 import (
+from vllm.parser.grammar.parsers.qwen3 import (
     TOOL_CALL_END,
     TOOL_CALL_START,
     qwen3xml_config,
 )
-from vllm.grammar_parser.unified_parser import GrammarParser
+from vllm.parser.grammar.unified_parser import GrammarParser
 
 _SPECIAL_DECODE = {100: TOOL_CALL_START, 101: TOOL_CALL_END}
 
@@ -519,7 +519,7 @@ class TestArgConverter:
     """Direct tests for the qwen3xml arg_converter with multi-line values."""
 
     def test_multiline_param_values(self):
-        from vllm.grammar_parser.parsers.qwen3 import (
+        from vllm.parser.grammar.parsers.qwen3 import (
             _qwen3xml_arg_converter,
         )
 
@@ -536,7 +536,7 @@ class TestArgConverter:
         assert result["description"] == "List files"
 
     def test_two_multiline_params(self):
-        from vllm.grammar_parser.parsers.qwen3 import (
+        from vllm.parser.grammar.parsers.qwen3 import (
             _qwen3xml_arg_converter,
         )
 
@@ -549,7 +549,7 @@ class TestArgConverter:
         assert result["b"] == "baz\nqux"
 
     def test_partial_multiline(self):
-        from vllm.grammar_parser.parsers.qwen3 import (
+        from vllm.parser.grammar.parsers.qwen3 import (
             _qwen3xml_arg_converter,
         )
 

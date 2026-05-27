@@ -14,7 +14,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from tests.grammar_parser.streaming_helpers import (
+from tests.parser.grammar.streaming_helpers import (
     collect_function_name,
     collect_tool_arguments,
     simulate_tool_streaming,
@@ -22,7 +22,7 @@ from tests.grammar_parser.streaming_helpers import (
 from vllm.entrypoints.openai.chat_completion.protocol import (
     ChatCompletionRequest,
 )
-from vllm.grammar_parser.parsers.nemotron_v3 import NemotronV3GrammarParser
+from vllm.parser.grammar.parsers.nemotron_v3 import NemotronV3GrammarParser
 
 _THINK_START_ID = 50
 _THINK_END_ID = 51

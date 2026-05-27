@@ -22,7 +22,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum, auto
 
-from vllm.grammar_parser.events import EventType
+from vllm.parser.grammar.events import EventType
 
 STRUCTURAL_DROP_TOKENS: frozenset[str] = frozenset(
     {

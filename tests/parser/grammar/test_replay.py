@@ -13,7 +13,7 @@ import dataclasses
 
 import pytest
 
-from tests.grammar_parser.replay_harness import (
+from tests.parser.grammar.replay_harness import (
     _test_request,
     assert_no_terminal_leakage,
     assert_parse_output,
@@ -23,10 +23,10 @@ from tests.grammar_parser.replay_harness import (
     replay_streaming,
     replay_with_text_holdback,
 )
-from vllm.grammar_parser.parsers.gemma4 import Gemma4GrammarParser
-from vllm.grammar_parser.parsers.nemotron_v3 import NemotronV3GrammarParser
-from vllm.grammar_parser.parsers.qwen3 import Qwen3GrammarParser
 from vllm.parser import _GRAMMAR_PARSERS_TO_REGISTER, ParserManager
+from vllm.parser.grammar.parsers.gemma4 import Gemma4GrammarParser
+from vllm.parser.grammar.parsers.nemotron_v3 import NemotronV3GrammarParser
+from vllm.parser.grammar.parsers.qwen3 import Qwen3GrammarParser
 
 _gemma4_samples = load_samples("gemma4")
 _nemotron_v3_samples = load_samples("nemotron_v3")
@@ -147,7 +147,7 @@ class TestGrammarParserAdjustRequest:
         """Adapters must delegate adjust_request so that
         skip_special_tokens=False reaches the detokenizer even when the
         serving code only calls the adapter (not the unified parser)."""
-        import vllm.grammar_parser.adapters as adapters_mod
+        import vllm.parser.grammar.adapters as adapters_mod
 
         base_cls = getattr(adapters_mod, adapter_base)
         sample = _nemotron_v3_samples[0]

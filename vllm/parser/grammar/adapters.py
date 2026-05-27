@@ -25,7 +25,7 @@ if TYPE_CHECKING:
         ExtractedToolCallInformation,
     )
     from vllm.entrypoints.openai.responses.protocol import ResponsesRequest
-    from vllm.grammar_parser.unified_parser import GrammarParser
+    from vllm.parser.grammar.unified_parser import GrammarParser
     from vllm.tokenizers import TokenizerLike
     from vllm.tool_parsers.utils import Tool
 

@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from tests.grammar_parser.streaming_helpers import (
+from tests.parser.grammar.streaming_helpers import (
     collect_content,
     collect_function_name,
     collect_tool_arguments,
@@ -17,7 +17,7 @@ from tests.grammar_parser.streaming_helpers import (
 from vllm.entrypoints.openai.chat_completion.protocol import (
     ChatCompletionRequest,
 )
-from vllm.grammar_parser.parsers.deepseek_v4 import (
+from vllm.parser.grammar.parsers.deepseek_v4 import (
     DSML_INVOKE_END,
     DSML_INVOKE_NAME_END,
     DSML_INVOKE_PREFIX,
@@ -29,7 +29,7 @@ from vllm.grammar_parser.parsers.deepseek_v4 import (
     _dsml_arg_converter,
     deepseek_v4_config,
 )
-from vllm.grammar_parser.unified_parser import GrammarParser
+from vllm.parser.grammar.unified_parser import GrammarParser
 
 _THINK_START_ID = 50
 _THINK_END_ID = 51

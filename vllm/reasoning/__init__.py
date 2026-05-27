@@ -122,7 +122,7 @@ _REASONING_PARSERS_TO_REGISTER = {
     ),
 }
 
-_ADAPTER_MODULE = "vllm.grammar_parser.registered_adapters"
+_ADAPTER_MODULE = "vllm.parser.grammar.registered_adapters"
 
 _GRAMMAR_REASONING_ADAPTERS_TO_REGISTER = {
     "deepseek_v4_grammar": (_ADAPTER_MODULE, "DeepSeekV4GrammarParserReasoningAdapter"),

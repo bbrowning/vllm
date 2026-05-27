@@ -15,14 +15,14 @@ from __future__ import annotations
 import dataclasses
 from typing import TYPE_CHECKING
 
-from vllm.grammar_parser.parsers.qwen3 import Qwen3GrammarParser, qwen3_config
+from vllm.parser.grammar.parsers.qwen3 import Qwen3GrammarParser, qwen3_config
 
 if TYPE_CHECKING:
     from vllm.entrypoints.openai.chat_completion.protocol import (
         ChatCompletionRequest,
     )
     from vllm.entrypoints.openai.responses.protocol import ResponsesRequest
-    from vllm.grammar_parser.grammar_config import GrammarConfig
+    from vllm.parser.grammar.grammar_config import GrammarConfig
     from vllm.tokenizers import TokenizerLike
     from vllm.tool_parsers.abstract_tool_parser import Tool
 

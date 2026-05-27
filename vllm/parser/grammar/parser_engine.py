@@ -7,19 +7,19 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from vllm.grammar_parser.events import EventType, SemanticEvent
-from vllm.grammar_parser.grammar_config import (
+from vllm.parser.grammar.events import EventType, SemanticEvent
+from vllm.parser.grammar.grammar_config import (
     STRUCTURAL_DROP_TOKENS,
     GrammarConfig,
     ParserState,
     Transition,
 )
-from vllm.grammar_parser.incremental_lexer import (
+from vllm.parser.grammar.incremental_lexer import (
     IncrementalLexer,
     LexToken,
     terminals_from_literals,
 )
-from vllm.grammar_parser.token_id_scanner import (
+from vllm.parser.grammar.token_id_scanner import (
     PreLexedTerminal,
     TextChunk,
     TokenIDScanner,

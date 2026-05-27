@@ -24,27 +24,27 @@ _PARSERS_TO_REGISTER = {
 
 _GRAMMAR_PARSERS_TO_REGISTER = {
     "deepseek_v4_grammar": (
-        "vllm.grammar_parser.registered_adapters",
+        "vllm.parser.grammar.registered_adapters",
         "DeepSeekV4GrammarParser",
     ),
     "gemma4_grammar": (
-        "vllm.grammar_parser.registered_adapters",
+        "vllm.parser.grammar.registered_adapters",
         "Gemma4GrammarParser",
     ),
     "qwen3_grammar": (
-        "vllm.grammar_parser.registered_adapters",
+        "vllm.parser.grammar.registered_adapters",
         "Qwen3GrammarParser",
     ),
     "qwen3_xml_grammar": (
-        "vllm.grammar_parser.registered_adapters",
+        "vllm.parser.grammar.registered_adapters",
         "Qwen3XMLGrammarParser",
     ),
     "qwen3_coder_grammar": (
-        "vllm.grammar_parser.registered_adapters",
+        "vllm.parser.grammar.registered_adapters",
         "Qwen3XMLGrammarParser",
     ),
     "nemotron_v3_grammar": (
-        "vllm.grammar_parser.registered_adapters",
+        "vllm.parser.grammar.registered_adapters",
         "NemotronV3GrammarParser",
     ),
 }

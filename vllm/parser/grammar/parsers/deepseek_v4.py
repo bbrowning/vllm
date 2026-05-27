@@ -37,13 +37,13 @@ from typing import TYPE_CHECKING
 
 import regex as re
 
-from vllm.grammar_parser.events import EventType
-from vllm.grammar_parser.grammar_config import (
+from vllm.parser.grammar.events import EventType
+from vllm.parser.grammar.grammar_config import (
     GrammarConfig,
     ParserState,
     Transition,
 )
-from vllm.grammar_parser.unified_parser import GrammarParser
+from vllm.parser.grammar.unified_parser import GrammarParser
 
 if TYPE_CHECKING:
     from vllm.tokenizers import TokenizerLike

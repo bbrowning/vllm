@@ -47,7 +47,7 @@ class ParseOutput:
 
 
 def load_samples(model: str) -> list[Sample]:
-    """Load all samples from ``tests/grammar_parser/data/{model}.jsonl``."""
+    """Load all samples from ``tests/parser/grammar/data/{model}.jsonl``."""
     path = DATA_DIR / f"{model}.jsonl"
     if not path.exists():
         return []

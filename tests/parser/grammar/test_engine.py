@@ -4,13 +4,13 @@
 
 from unittest.mock import MagicMock
 
-from vllm.grammar_parser.events import EventType, SemanticEvent
-from vllm.grammar_parser.grammar_config import (
+from vllm.parser.grammar.events import EventType, SemanticEvent
+from vllm.parser.grammar.grammar_config import (
     GrammarConfig,
     ParserState,
     Transition,
 )
-from vllm.grammar_parser.parser_engine import StreamingParserEngine
+from vllm.parser.grammar.parser_engine import StreamingParserEngine
 
 
 def _hermes_config() -> GrammarConfig:
