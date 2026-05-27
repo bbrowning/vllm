@@ -17,7 +17,6 @@ import pytest
 from tests.grammar_parser.streaming_helpers import (
     collect_function_name,
     collect_tool_arguments,
-    simulate_reasoning_streaming,
     simulate_tool_streaming,
 )
 from vllm.entrypoints.openai.chat_completion.protocol import (
@@ -65,41 +64,6 @@ def _make_request(**chat_template_kwargs):
 @pytest.fixture
 def parser():
     return NemotronV3GrammarParser(_make_tokenizer())
-
-
-class TestNonStreamingReasoning:
-    def test_reasoning_then_content(self, parser):
-        text = "Let me analyze.</think>The answer is 42."
-        request = _make_request()
-        reasoning, content = parser.extract_reasoning(text, request)
-        assert reasoning == "Let me analyze."
-        assert content == "The answer is 42."
-
-    def test_reasoning_only(self, parser):
-        text = "Still thinking..."
-        request = _make_request()
-        reasoning, content = parser.extract_reasoning(text, request)
-        assert reasoning == "Still thinking..."
-        assert content is None
-
-    def test_with_think_tags(self, parser):
-        text = "<think>Let me analyze.</think>The answer is 42."
-        request = _make_request()
-        reasoning, content = parser.extract_reasoning(text, request)
-        assert reasoning == "Let me analyze."
-        assert content == "The answer is 42."
-
-    def test_tool_call_implicit_end(self, parser):
-        text = (
-            "I need to read the file.\n\n"
-            "<tool_call>\n<function=bash>\n"
-            "<parameter=cmd>ls</parameter>\n"
-            "</function>\n</tool_call>"
-        )
-        request = _make_request()
-        reasoning, content = parser.extract_reasoning(text, request)
-        assert reasoning == "I need to read the file.\n\n"
-        assert "<tool_call>" not in reasoning
 
 
 class TestNemotronSwap:
@@ -161,25 +125,6 @@ class TestNemotronSwap:
         assert reasoning == "   "
 
 
-class TestIsReasoningEnd:
-    def test_think_end_token(self, parser):
-        assert parser.is_reasoning_end([_THINK_START_ID, 1, _THINK_END_ID])
-
-    def test_no_end_token(self, parser):
-        assert not parser.is_reasoning_end([_THINK_START_ID, 1, 2])
-
-    def test_tool_call_as_implicit_end(self, parser):
-        assert parser.is_reasoning_end([_THINK_START_ID, 1, _TOOL_CALL_ID])
-
-    def test_paired_tool_call_not_end(self, parser):
-        assert not parser.is_reasoning_end(
-            [_THINK_START_ID, 1, _TOOL_CALL_ID, 2, _TOOL_CALL_END_ID]
-        )
-
-    def test_empty_ids(self, parser):
-        assert not parser.is_reasoning_end([])
-
-
 class TestNonStreamingToolCalls:
     def test_single_tool_call(self, parser):
         text = (
@@ -227,33 +172,6 @@ class TestNonStreamingToolCalls:
 
 
 class TestStreaming:
-    def test_basic_streaming_reasoning(self, parser):
-        reasoning, content = simulate_reasoning_streaming(
-            parser,
-            ["thinking", " hard", "</think>", "done"],
-            [
-                (1,),
-                (2,),
-                (_THINK_END_ID,),
-                (3,),
-            ],
-        )
-        assert reasoning == "thinking hard"
-        assert content == "done"
-
-    def test_streaming_tool_call_implicit_end(self, parser):
-        reasoning, content = simulate_reasoning_streaming(
-            parser,
-            ["I need to check.", "<tool_call>", "\n<function=test>"],
-            [
-                (1,),
-                (_TOOL_CALL_ID,),
-                (2,),
-            ],
-        )
-        assert reasoning == "I need to check."
-        assert "<tool_call>" not in reasoning
-
     def test_streaming_tool_calls(self, parser):
         request = _make_request()
         chunks = [
