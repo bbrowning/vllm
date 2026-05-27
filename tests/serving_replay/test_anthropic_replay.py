@@ -69,6 +69,7 @@ async def _generate_openai_sse_stream(sample, chunk_size):
         conversation=[],
         tokenizer=tokenizer,
         request_metadata=RequestResponseMetadata(request_id="test-req"),
+        chat_template_kwargs=sample.chat_template_kwargs,
     ):
         yield chunk
 

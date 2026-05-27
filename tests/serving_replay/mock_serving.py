@@ -154,6 +154,7 @@ def build_anthropic_serving(
 
 def build_serving_responses(
     parser_cls: type[Parser] | None = None,
+    chat_template_kwargs: dict[str, Any] | None = None,
 ) -> OpenAIServingResponses:
     """Build an ``OpenAIServingResponses`` with the given parser class."""
     engine, models, render = _common_serving_args()
@@ -166,4 +167,6 @@ def build_serving_responses(
         request_logger=None,
     )
     serving.parser = parser_cls
+    if chat_template_kwargs is not None:
+        serving.chat_template_kwargs = chat_template_kwargs
     return serving

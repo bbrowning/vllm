@@ -47,7 +47,9 @@ def _build_responses_request(sample) -> ResponsesRequest:
 async def test_responses_streaming(sample, chunk_size):
     tokenizer = make_mock_tokenizer(sample)
     parser_cls = get_parser_cls(sample.parser_name)
-    serving_responses = build_serving_responses(parser_cls)
+    serving_responses = build_serving_responses(
+        parser_cls, chat_template_kwargs=sample.chat_template_kwargs
+    )
     request = _build_responses_request(sample)
     sampling_params = SamplingParams()
     context = SimpleContext()

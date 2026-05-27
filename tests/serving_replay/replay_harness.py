@@ -13,6 +13,7 @@ import json
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 # Re-use the mock tokenizer builder from the grammar parser tests.
 from tests.grammar_parser.replay_harness import (
@@ -47,6 +48,7 @@ class ServingSample:
     tools: list[dict] | None
     include_reasoning: bool
     expected_finish_reason: str
+    chat_template_kwargs: dict[str, Any] | None
 
     def __repr__(self) -> str:
         return f"ServingSample({self.id!r})"
@@ -85,6 +87,7 @@ def load_serving_samples(model: str) -> list[ServingSample]:
                 tools=serving.get("tools"),
                 include_reasoning=serving.get("include_reasoning", True),
                 expected_finish_reason=serving.get("expected_finish_reason", "stop"),
+                chat_template_kwargs=serving.get("chat_template_kwargs"),
             )
         )
     return samples

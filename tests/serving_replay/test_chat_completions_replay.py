@@ -61,6 +61,7 @@ async def test_streaming(sample, chunk_size):
             conversation=[],
             tokenizer=tokenizer,
             request_metadata=RequestResponseMetadata(request_id="test-req"),
+            chat_template_kwargs=sample.chat_template_kwargs,
         )
     )
     assert_chat_completion_response(response, sample)
