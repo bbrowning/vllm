@@ -810,52 +810,10 @@ async def test_serving_chat_should_set_correct_max_tokens():
 
 @pytest.mark.asyncio
 async def test_serving_chat_parser_adjust_request_sets_skip_special_tokens():
-    """Parser.adjust_request() must run before to_sampling_params()
-    so that parser-set flags like skip_special_tokens=False reach
-    the detokenizer.  Without this, grammar parsers that rely on
-    special-token text in delta_text silently break.
+    """adjust_request() on the render layer's reasoning_parser must run
+    before to_sampling_params() so that parser-set flags like
+    skip_special_tokens=False reach the detokenizer.
     """
-    mock_engine = MagicMock(spec=AsyncLLM)
-    mock_engine.errored = False
-    mock_engine.model_config = MockModelConfig()
-    mock_engine.input_processor = MagicMock()
-    mock_engine.renderer = _build_renderer(mock_engine.model_config)
-
-    serving_chat = _build_serving_chat(mock_engine)
-
-    # Simulate a unified parser whose adjust_request sets
-    # skip_special_tokens=False (as all grammar parsers do).
-    class _StubParser:
-        def __init__(self, tokenizer, tools=None, **kwargs):
-            pass
-
-        def adjust_request(self, request):
-            request.skip_special_tokens = False
-            return request
-
-    serving_chat.parser_cls = _StubParser
-
-    req = ChatCompletionRequest(
-        model=MODEL_NAME,
-        messages=[{"role": "user", "content": "hello"}],
-    )
-    assert req.skip_special_tokens is True
-
-    with suppress(Exception):
-        await serving_chat.create_chat_completion(req)
-
-    sampling_params = mock_engine.generate.call_args.args[1]
-    assert sampling_params.skip_special_tokens is False, (
-        "adjust_request() must be called before to_sampling_params() "
-        "so that skip_special_tokens=False reaches the detokenizer"
-    )
-
-
-@pytest.mark.asyncio
-async def test_serving_chat_reasoning_parser_adjust_request():
-    """When a reasoning_parser adapter delegates adjust_request to the
-    underlying grammar parser, skip_special_tokens=False must reach
-    SamplingParams even though parser_cls is also set."""
     mock_engine = MagicMock(spec=AsyncLLM)
     mock_engine.errored = False
     mock_engine.model_config = MockModelConfig()
@@ -872,10 +830,7 @@ async def test_serving_chat_reasoning_parser_adjust_request():
             request.skip_special_tokens = False
             return request
 
-        def is_reasoning_end(self, token_ids):
-            return True
-
-    serving_chat.reasoning_parser_cls = _StubReasoningParser
+    serving_chat.openai_serving_render.reasoning_parser = _StubReasoningParser
 
     req = ChatCompletionRequest(
         model=MODEL_NAME,
@@ -892,8 +847,8 @@ async def test_serving_chat_reasoning_parser_adjust_request():
     )
     sampling_params = mock_engine.generate.call_args.args[1]
     assert sampling_params.skip_special_tokens is False, (
-        "reasoning_parser.adjust_request() must propagate "
-        "skip_special_tokens=False to SamplingParams"
+        "adjust_request() must be called before to_sampling_params() "
+        "so that skip_special_tokens=False reaches the detokenizer"
     )
 
 
