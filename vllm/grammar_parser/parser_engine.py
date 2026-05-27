@@ -181,20 +181,8 @@ class StreamingParserEngine:
                     tool_index=self.tool_index,
                 )
             )
-            events.append(
-                SemanticEvent(
-                    EventType.TOOL_SECTION_END,
-                    tool_index=self.tool_index,
-                )
-            )
             self.state = ParserState.CONTENT
         elif self.state == ParserState.TOOL_PREAMBLE:
-            events.append(
-                SemanticEvent(
-                    EventType.TOOL_SECTION_END,
-                    tool_index=self.tool_index,
-                )
-            )
             self.state = ParserState.CONTENT
         elif self.state == ParserState.REASONING:
             events.append(

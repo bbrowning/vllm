@@ -562,6 +562,8 @@ class GrammarParser(Parser):
                     self._handle_arg_chunk(event, tool_call_deltas)
                 case EventType.TOOL_CALL_END:
                     self._handle_tool_end(event, tool_call_deltas)
+                case EventType.REASONING_START:
+                    pass  # no delta-level effect
 
         content_str = "".join(content_parts)
         stripped = content_str.strip() if content_str else ""

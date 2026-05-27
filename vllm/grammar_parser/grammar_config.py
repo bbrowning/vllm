@@ -44,7 +44,6 @@ class ParserState(Enum):
     TOOL_NAME = auto()
     TOOL_ARGS = auto()
     TOOL_BETWEEN = auto()
-    DONE = auto()
 
 
 @dataclass(slots=True)

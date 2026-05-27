@@ -13,12 +13,10 @@ class EventType(Enum):
     REASONING_START = auto()
     REASONING_CHUNK = auto()
     REASONING_END = auto()
-    TOOL_SECTION_START = auto()
     TOOL_CALL_START = auto()
     TOOL_NAME = auto()
     ARG_VALUE_CHUNK = auto()
     TOOL_CALL_END = auto()
-    TOOL_SECTION_END = auto()
 
 
 @dataclass(slots=True)
