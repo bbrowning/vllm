@@ -24,7 +24,7 @@ from vllm.outputs import CompletionOutput, RequestOutput
 from vllm.parser import ParserManager
 from vllm.parser.abstract_parser import Parser
 
-DATA_DIR = Path(__file__).parent / "data"
+DATA_DIR = Path(__file__).parent.parent / "grammar_parser" / "data"
 
 CHUNK_SIZES = [1, 2, 3, 5, 11, 23, None]
 
@@ -56,7 +56,7 @@ class ServingSample:
 
 def load_serving_samples(model: str) -> list[ServingSample]:
     """Load all samples with ``serving`` section from
-    ``tests/serving_replay/data/{model}.jsonl``."""
+    ``tests/grammar_parser/data/{model}.jsonl``."""
     path = DATA_DIR / f"{model}.jsonl"
     if not path.exists():
         return []

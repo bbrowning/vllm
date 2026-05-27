@@ -28,36 +28,11 @@ from vllm.grammar_parser.parsers.nemotron_v3 import NemotronV3GrammarParser
 from vllm.grammar_parser.parsers.qwen3 import Qwen3GrammarParser
 from vllm.parser import _GRAMMAR_PARSERS_TO_REGISTER, ParserManager
 
-CHUNK_SIZES = [1, 2, 3, 5, 10, 20, None]
-
 _gemma4_samples = load_samples("gemma4")
 _nemotron_v3_samples = load_samples("nemotron_v3")
 _qwen3_samples = load_samples("qwen3")
 
 _GEMMA4_TERMINALS = ["<|channel>", "<channel|>", "<|tool_call>", "<tool_call|>"]
-
-
-@pytest.mark.parametrize("chunk_size", CHUNK_SIZES, ids=lambda c: f"chunk{c}")
-@pytest.mark.parametrize("sample", _gemma4_samples, ids=lambda s: s.id)
-class TestGemma4Replay:
-    """Replay Gemma4 token sequences at different chunk sizes."""
-
-    def test_replay(self, sample, chunk_size):
-        tokenizer = make_mock_tokenizer(sample)
-        parser = Gemma4GrammarParser(tokenizer)
-        deltas = replay_streaming(parser, sample.tokens, chunk_size=chunk_size)
-        output = collect_output(deltas)
-
-        assert_parse_output(output, sample)
-        assert_no_terminal_leakage(output, _GEMMA4_TERMINALS)
-
-        assert "thought\n" not in output.content, (
-            "'thought\\n' prefix leaked into content"
-        )
-        assert not output.reasoning.startswith("thought\n"), (
-            "reasoning starts with unstripped 'thought\\n' prefix"
-        )
-
 
 HOLDBACK_CONFIGS = [6, 12, 24]
 
@@ -95,21 +70,6 @@ _QWEN3_TERMINALS = [
     "<function=",
     "</function>",
 ]
-
-
-@pytest.mark.parametrize("chunk_size", CHUNK_SIZES, ids=lambda c: f"chunk{c}")
-@pytest.mark.parametrize("sample", _qwen3_samples, ids=lambda s: s.id)
-class TestQwen3Replay:
-    """Replay Qwen3 token sequences at different chunk sizes."""
-
-    def test_replay(self, sample, chunk_size):
-        tokenizer = make_mock_tokenizer(sample)
-        parser = Qwen3GrammarParser(tokenizer)
-        deltas = replay_streaming(parser, sample.tokens, chunk_size=chunk_size)
-        output = collect_output(deltas)
-
-        assert_parse_output(output, sample)
-        assert_no_terminal_leakage(output, _QWEN3_TERMINALS)
 
 
 @pytest.mark.parametrize("holdback", HOLDBACK_CONFIGS, ids=lambda h: f"holdback{h}")
