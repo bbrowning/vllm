@@ -689,7 +689,10 @@ class DelegatingParser(Parser):
                 delta_token_ids=delta_token_ids,
             )
             # Hand off remaining content to tool parser
-            if self._tool_parser and self.is_reasoning_end_streaming(current_token_ids, delta_token_ids):
+            reasoning_end = self.is_reasoning_end_streaming(
+                current_token_ids, delta_token_ids
+            )
+            if self._tool_parser and reasoning_end:
                 # Verify the reasoning parser actually processed the end.
                 # Grammar parsers may defer the end terminal when the
                 # detokenizer holds back text, causing a token-ID / text
