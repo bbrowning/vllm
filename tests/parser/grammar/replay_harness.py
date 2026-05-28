@@ -298,14 +298,16 @@ def replay_with_text_holdback(
 def collect_output(results: list[DeltaMessage | None]) -> ParseOutput:
     """Accumulate ``DeltaMessage`` results into a :class:`ParseOutput`."""
     output = ParseOutput()
+    reasoning_parts: list[str] = []
+    content_parts: list[str] = []
 
     for r in results:
         if r is None:
             continue
         if r.reasoning:
-            output.reasoning += r.reasoning
+            reasoning_parts.append(r.reasoning)
         if r.content:
-            output.content += r.content
+            content_parts.append(r.content)
         if r.tool_calls:
             for tc in r.tool_calls:
                 if tc.function and tc.function.name:
@@ -330,6 +332,9 @@ def collect_output(results: list[DeltaMessage | None]) -> ParseOutput:
                         if existing_tc.get("_index") == tc.index:
                             existing_tc["arguments"] += tc.function.arguments
                             break
+
+    output.reasoning = "".join(reasoning_parts)
+    output.content = "".join(content_parts)
 
     for tc in output.tool_calls:
         tc.pop("_index", None)

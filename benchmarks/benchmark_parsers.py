@@ -27,6 +27,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import gc
 import logging
 import statistics
 import sys
@@ -232,12 +233,15 @@ def time_sample(
 
     raw = _RawTimings()
     for _ in range(iterations):
+        gc.collect()
+        gc.disable()
         t0 = time.perf_counter()
         parser = factory(tokenizer, sample.tools, **extra_kwargs)
         t1 = time.perf_counter()
         results = replay_streaming(parser, sample.tokens, chunk_size=chunk_size)
         collect_output(results)
         t2 = time.perf_counter()
+        gc.enable()
         raw.total.append(t2 - t0)
         raw.init.append(t1 - t0)
         raw.parse.append(t2 - t1)
