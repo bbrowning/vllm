@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import pytest
 
-from tests.serving_replay.mock_serving import build_serving_responses
-from tests.serving_replay.replay_harness import (
+from tests.entrypoints.serving_replay.mock_serving import build_serving_responses
+from tests.entrypoints.serving_replay.replay_harness import (
     CHUNK_SIZES,
     assert_responses_events,
     get_parser_cls,

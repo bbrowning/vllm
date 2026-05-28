@@ -12,10 +12,12 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 # Re-use the mock tokenizer builder from the grammar parser tests.
+from tests.parser.grammar.replay_harness import (
+    DATA_DIR,
+)
 from tests.parser.grammar.replay_harness import (
     make_mock_tokenizer as _make_mock_tokenizer,
 )
@@ -23,8 +25,6 @@ from vllm.entrypoints.openai.responses.context import SimpleContext
 from vllm.outputs import CompletionOutput, RequestOutput
 from vllm.parser import ParserManager
 from vllm.parser.abstract_parser import Parser
-
-DATA_DIR = Path(__file__).parent.parent / "parser" / "grammar" / "data"
 
 CHUNK_SIZES = [1, 2, 3, 5, 11, 23, None]
 

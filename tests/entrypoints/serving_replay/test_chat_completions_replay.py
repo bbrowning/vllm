@@ -12,8 +12,8 @@ from __future__ import annotations
 import pytest
 
 from tests.entrypoints.openai.utils import accumulate_streaming_response
-from tests.serving_replay.mock_serving import build_serving_chat
-from tests.serving_replay.replay_harness import (
+from tests.entrypoints.serving_replay.mock_serving import build_serving_chat
+from tests.entrypoints.serving_replay.replay_harness import (
     CHUNK_SIZES,
     assert_chat_completion_response,
     get_parser_cls,
