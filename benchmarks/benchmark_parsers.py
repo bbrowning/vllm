@@ -128,7 +128,7 @@ def _make_old_parser_factory(
         # Enrich the mock tokenizer vocab so old parsers can look up
         # tokens that aren't in the sample data (e.g. <|turn>)
         original_vocab = tokenizer.get_vocab()
-        tokenizer.get_vocab.return_value = _FallbackVocab(original_vocab)
+        tokenizer.set_vocab(_FallbackVocab(original_vocab))
 
         cls = type(
             "_BenchWrappedParser",
@@ -139,8 +139,7 @@ def _make_old_parser_factory(
             },
         )
         result = cls(tokenizer, tools, **kwargs)
-        # Restore original vocab for subsequent use
-        tokenizer.get_vocab.return_value = original_vocab
+        tokenizer.set_vocab(original_vocab)
         return result
 
     return factory

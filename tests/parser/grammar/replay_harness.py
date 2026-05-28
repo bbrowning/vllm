@@ -13,7 +13,6 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from unittest.mock import MagicMock
 
 from vllm.entrypoints.openai.chat_completion.protocol import (
     ChatCompletionRequest,
@@ -84,33 +83,63 @@ def load_samples(model: str) -> list[Sample]:
     return load_samples_from_path(DATA_DIR / f"{model}.jsonl")
 
 
-def make_mock_tokenizer(sample: Sample) -> MagicMock:
-    """Build a mock tokenizer from a sample's vocab and token data."""
-    token_decode_map: dict[int, str] = {}
-    for tid, text in sample.tokens:
-        token_decode_map[tid] = text
+class MockTokenizer:
+    """Lightweight tokenizer mock that avoids unittest.mock overhead.
 
-    special_text_to_id = dict(sample.vocab)
+    Used by ``benchmarks/benchmark_parsers.py`` in tight timing loops,
+    so hot-path methods (``decode``, ``get_vocab``) must be cheap.
+    MagicMock's call-recording machinery added ~40% overhead to small-
+    sample benchmarks, inflating the per-token cost of the grammar parser.
+    """
 
-    tokenizer = MagicMock()
-    tokenizer.get_vocab.return_value = dict(special_text_to_id)
-    tokenizer.encode.return_value = [tid for tid, _ in sample.tokens]
+    __slots__ = (
+        "_vocab",
+        "_token_ids",
+        "_token_decode_map",
+        "_special_ids",
+        "eos_token_id",
+        "bos_token_id",
+        "pad_token_id",
+    )
 
-    def decode(ids, skip_special_tokens=False):
-        parts = []
+    def __init__(
+        self,
+        vocab: dict[str, int],
+        tokens: list[tuple[int, str]],
+    ) -> None:
+        self._vocab = vocab
+        self._token_ids = [tid for tid, _ in tokens]
+        self._token_decode_map = {tid: text for tid, text in tokens}
+        self._special_ids = set(vocab.values())
+        self.eos_token_id = None
+        self.bos_token_id = None
+        self.pad_token_id = None
+
+    def set_vocab(self, vocab: dict[str, int]) -> None:
+        self._vocab = vocab
+
+    def get_vocab(self) -> dict[str, int]:
+        return self._vocab
+
+    def encode(self, text: str, **kwargs) -> list[int]:
+        return self._token_ids
+
+    def decode(self, ids: list[int], skip_special_tokens: bool = False) -> str:
+        parts: list[str] = []
         for tid in ids:
-            if skip_special_tokens and tid in _inv_special(special_text_to_id):
+            if skip_special_tokens and tid in self._special_ids:
                 continue
-            text = token_decode_map.get(tid, f"?{tid}?")
+            text = self._token_decode_map.get(tid, f"?{tid}?")
             parts.append(text)
         return "".join(parts)
 
-    tokenizer.decode.side_effect = decode
-    return tokenizer
 
-
-def _inv_special(vocab: dict[str, int]) -> set[int]:
-    return set(vocab.values())
+def make_mock_tokenizer(sample: Sample) -> MockTokenizer:
+    """Build a mock tokenizer from a sample's vocab and token data."""
+    return MockTokenizer(
+        vocab=dict(sample.vocab),
+        tokens=sample.tokens,
+    )
 
 
 def _test_request() -> ChatCompletionRequest:
