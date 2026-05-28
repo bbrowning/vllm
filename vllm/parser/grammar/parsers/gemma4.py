@@ -95,8 +95,15 @@ def _gemma4_arg_converter(raw_args: str, partial: bool) -> str:
     return json.dumps(parsed, ensure_ascii=False)
 
 
+_GEMMA4_CONFIG: GrammarConfig | None = None
+
+
 def gemma4_config() -> GrammarConfig:
     """Return the grammar config for Gemma4 reasoning + tool calls."""
+    global _GEMMA4_CONFIG
+    if _GEMMA4_CONFIG is not None:
+        return _GEMMA4_CONFIG
+
     used_tokens = {
         CHANNEL_START,
         CHANNEL_END,
@@ -105,7 +112,7 @@ def gemma4_config() -> GrammarConfig:
         '<|"|>',
     }
 
-    return GrammarConfig(
+    _GEMMA4_CONFIG = GrammarConfig(
         name="gemma4",
         initial_state=ParserState.CONTENT,
         terminals={
@@ -179,6 +186,7 @@ def gemma4_config() -> GrammarConfig:
         arg_structural_chars=frozenset(",:{}[]<"),
         drop_tokens=_GEMMA4_MODEL_DROP_TOKENS - used_tokens,
     )
+    return _GEMMA4_CONFIG
 
 
 _GEMMA4_THOUGHT_PREFIX = "thought\n"

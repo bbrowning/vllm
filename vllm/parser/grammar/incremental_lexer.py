@@ -29,6 +29,48 @@ class LexToken:
     value: str
 
 
+class _LexerShape:
+    """Immutable pre-computed data derived from terminal definitions.
+
+    Created once per :class:`GrammarConfig` and shared across all
+    :class:`IncrementalLexer` instances that use the same config.
+    """
+
+    __slots__ = (
+        "terminals",
+        "literal_strings",
+        "regex_terminals",
+        "max_literal_len",
+        "literal_first_chars",
+        "has_only_literals",
+    )
+
+    def __init__(self, terminals: list[TerminalDef]) -> None:
+        self.terminals = sorted(
+            terminals,
+            key=lambda t: (not t.is_literal, -t.priority, -len(t.pattern.pattern)),
+        )
+        literal_strings: list[tuple[str, str]] = []
+        regex_terminals: list[TerminalDef] = []
+        for t in self.terminals:
+            if t.is_literal:
+                literal_strings.append((t.literal, t.name))
+            else:
+                regex_terminals.append(t)
+
+        self.literal_strings = literal_strings
+        self.regex_terminals = regex_terminals
+        max_len = 0
+        for lit, _ in literal_strings:
+            if len(lit) > max_len:
+                max_len = len(lit)
+        self.max_literal_len = max_len
+        self.literal_first_chars = frozenset(
+            lit[0] for lit, _ in literal_strings if lit
+        )
+        self.has_only_literals = not regex_terminals
+
+
 class IncrementalLexer:
     """Converts streaming text into grammar terminal tokens.
 
@@ -48,28 +90,24 @@ class IncrementalLexer:
         terminals: list[TerminalDef],
         content_terminal: str = "__CONTENT__",
     ) -> None:
-        self.terminals = sorted(
-            terminals,
-            key=lambda t: (not t.is_literal, -t.priority, -len(t.pattern.pattern)),
-        )
+        if isinstance(terminals, _LexerShape):
+            shape = terminals
+        else:
+            shape = _LexerShape(terminals)
+        self._shape = shape
+        self.terminals = shape.terminals
         self.content_terminal = content_terminal
         self.buffer = ""
 
-        self._literal_strings: list[tuple[str, str]] = []
-        self._regex_terminals: list[TerminalDef] = []
-        for t in self.terminals:
-            if t.is_literal:
-                self._literal_strings.append((t.literal, t.name))
-            else:
-                self._regex_terminals.append(t)
+        self._literal_strings = shape.literal_strings
+        self._regex_terminals = shape.regex_terminals
+        self._max_literal_len = shape.max_literal_len
+        self._literal_first_chars = shape.literal_first_chars
+        self._has_only_literals = shape.has_only_literals
 
-        self._max_literal_len = max(
-            (len(lit) for lit, _ in self._literal_strings), default=0
-        )
-        self._literal_first_chars = frozenset(
-            lit[0] for lit, _ in self._literal_strings if lit
-        )
-        self._has_only_literals = not self._regex_terminals
+    def reset(self) -> None:
+        """Clear mutable state for reuse across requests."""
+        self.buffer = ""
 
     def feed(self, text: str) -> list[LexToken]:
         """Feed a text chunk and return any fully-resolved tokens."""
@@ -92,12 +130,14 @@ class IncrementalLexer:
 
     def _drain(self) -> list[LexToken]:
         tokens: list[LexToken] = []
+        first_chars = self._literal_first_chars
+        literals = self._literal_strings
 
         while self.buffer:
-            if self._has_only_literals and self._literal_first_chars:
+            if self._has_only_literals and first_chars:
                 has_potential = False
                 for ch in self.buffer:
-                    if ch in self._literal_first_chars:
+                    if ch in first_chars:
                         has_potential = True
                         break
                 if not has_potential:
@@ -105,9 +145,9 @@ class IncrementalLexer:
                     self.buffer = ""
                     break
 
-            best_match: tuple[str, str, int] | None = None  # (terminal, value, length)
+            best_match: tuple[str, str, int] | None = None
 
-            for lit, name in self._literal_strings:
+            for lit, name in literals:
                 if self.buffer.startswith(lit) and (
                     best_match is None or len(lit) > best_match[2]
                 ):
@@ -146,8 +186,12 @@ class IncrementalLexer:
 
     def _has_prefix_match(self) -> bool:
         """Check if the buffer is a proper prefix of any literal terminal."""
+        buf_len = len(self.buffer)
+        if buf_len >= self._max_literal_len:
+            return False
+        buf = self.buffer
         for lit, _ in self._literal_strings:
-            if len(self.buffer) < len(lit) and lit.startswith(self.buffer):
+            if buf_len < len(lit) and lit.startswith(buf):
                 return True
         return False
 

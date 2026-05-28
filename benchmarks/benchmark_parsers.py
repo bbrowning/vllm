@@ -64,6 +64,8 @@ class TimingResult:
     parser_name: str
     token_count: int
     times_s: list[float] = field(default_factory=list)
+    init_times_s: list[float] = field(default_factory=list)
+    parse_times_s: list[float] = field(default_factory=list)
 
     @property
     def median_us(self) -> float:
@@ -78,6 +80,18 @@ class TimingResult:
     @property
     def min_us(self) -> float:
         return min(self.times_s) * 1e6
+
+    @property
+    def init_median_us(self) -> float:
+        if not self.init_times_s:
+            return 0.0
+        return statistics.median(self.init_times_s) * 1e6
+
+    @property
+    def parse_median_us(self) -> float:
+        if not self.parse_times_s:
+            return 0.0
+        return statistics.median(self.parse_times_s) * 1e6
 
 
 class _FallbackVocab(dict):
@@ -156,29 +170,39 @@ def smoke_test(
         return False
 
 
+@dataclass
+class _RawTimings:
+    total: list[float] = field(default_factory=list)
+    init: list[float] = field(default_factory=list)
+    parse: list[float] = field(default_factory=list)
+
+
 def time_sample(
     factory: ParserFactory,
     sample: Sample,
     iterations: int,
     warmup: int,
     chunk_size: int,
-) -> list[float]:
-    """Time replay of a sample through a parser. Returns list of durations."""
+) -> _RawTimings:
+    """Time replay of a sample through a parser. Returns timing breakdown."""
     tokenizer = make_mock_tokenizer(sample)
 
     for _ in range(warmup):
         parser = factory(tokenizer, sample.tools)
         replay_streaming(parser, sample.tokens, chunk_size=chunk_size)
 
-    times: list[float] = []
+    raw = _RawTimings()
     for _ in range(iterations):
+        t0 = time.perf_counter()
         parser = factory(tokenizer, sample.tools)
-        start = time.perf_counter()
+        t1 = time.perf_counter()
         results = replay_streaming(parser, sample.tokens, chunk_size=chunk_size)
         collect_output(results)
-        end = time.perf_counter()
-        times.append(end - start)
-    return times
+        t2 = time.perf_counter()
+        raw.total.append(t2 - t0)
+        raw.init.append(t1 - t0)
+        raw.parse.append(t2 - t1)
+    return raw
 
 
 def print_comparison_table(
@@ -262,6 +286,39 @@ def print_comparison_table(
     print()
 
 
+def print_breakdown_table(
+    results: dict[str, list[TimingResult]],
+    parser_names: list[str],
+) -> None:
+    """Print init vs parse timing breakdown for each parser."""
+    if not any(r.init_times_s for rl in results.values() for r in rl):
+        return
+
+    print("=" * 70)
+    print("INIT vs PARSE BREAKDOWN (median, microseconds)")
+    print("=" * 70)
+
+    for name in parser_names:
+        r_list = results.get(name, [])
+        if not r_list:
+            continue
+        print(f"\n  {name}:")
+        print(
+            f"    {'Sample':<40}  {'Init':>8}  {'Parse':>8}  {'Total':>8}  {'Init%':>6}"
+        )
+        print(f"    {'-' * 40}  {'-' * 8}  {'-' * 8}  {'-' * 8}  {'-' * 6}")
+        for r in r_list:
+            init_us = r.init_median_us
+            parse_us = r.parse_median_us
+            total_us = r.median_us
+            pct = (init_us / total_us * 100) if total_us > 0 else 0
+            print(
+                f"    {r.sample_id:<40}  {init_us:>8.1f}  "
+                f"{parse_us:>8.1f}  {total_us:>8.1f}  {pct:>5.1f}%"
+            )
+    print()
+
+
 def run_comparison(
     samples: list[Sample],
     factories: dict[str, ParserFactory],
@@ -287,22 +344,25 @@ def run_comparison(
     results: dict[str, list[TimingResult]] = {n: [] for n in parser_names}
     for sample in samples:
         for name, factory in factories.items():
-            times = time_sample(factory, sample, iterations, warmup, chunk_size)
+            raw = time_sample(factory, sample, iterations, warmup, chunk_size)
             results[name].append(
                 TimingResult(
                     sample_id=sample.id,
                     parser_name=name,
                     token_count=len(sample.tokens),
-                    times_s=times,
+                    times_s=raw.total,
+                    init_times_s=raw.init,
+                    parse_times_s=raw.parse,
                 )
             )
-            med_us = statistics.median(times) * 1e6
+            med_us = statistics.median(raw.total) * 1e6
             print(
                 f"  {name}: {sample.id} ({len(sample.tokens)} tokens) "
                 f"median={med_us:.1f}us"
             )
 
     print_comparison_table(results, parser_names)
+    print_breakdown_table(results, parser_names)
 
 
 def run_scaling(
@@ -358,10 +418,8 @@ def run_scaling(
                 tools=sample.tools,
             )
 
-            times = time_sample(
-                factory, scaled_sample, iterations, warmup, chunk_size=1
-            )
-            median = statistics.median(times) * 1e6
+            raw = time_sample(factory, scaled_sample, iterations, warmup, chunk_size=1)
+            median = statistics.median(raw.total) * 1e6
 
             if prev_median and prev_mult:
                 ratio = median / prev_median

@@ -17,7 +17,6 @@ from vllm.parser.grammar.grammar_config import (
 from vllm.parser.grammar.incremental_lexer import (
     IncrementalLexer,
     LexToken,
-    terminals_from_literals,
 )
 from vllm.parser.grammar.token_id_scanner import (
     PreLexedTerminal,
@@ -54,6 +53,7 @@ class StreamingParserEngine:
         config: GrammarConfig,
         tokenizer,
         initial_state: ParserState | None = None,
+        vocab: dict[str, int] | None = None,
     ) -> None:
         self.config = config
         self.state = (
@@ -64,7 +64,8 @@ class StreamingParserEngine:
         resolved_token_ids: dict[int, str] = {}
         drop_token_ids: set[int] = set()
         if tokenizer is not None:
-            vocab = tokenizer.get_vocab()
+            if vocab is None:
+                vocab = tokenizer.get_vocab()
             if config.token_id_terminals:
                 for terminal_name, token_text in config.token_id_terminals.items():
                     tid = vocab.get(token_text)
@@ -80,6 +81,10 @@ class StreamingParserEngine:
                 if tid is not None:
                     drop_token_ids.add(tid)
 
+        self._resolved_token_ids = resolved_token_ids
+        self._drop_token_ids = drop_token_ids
+        self._tokenizer = tokenizer
+
         self._scanner = TokenIDScanner(
             resolved_token_ids,
             tokenizer,
@@ -91,11 +96,32 @@ class StreamingParserEngine:
         )
         self._ever_had_token_ids = False
 
-        terminal_defs = terminals_from_literals(config.terminals)
-        self._lexer = IncrementalLexer(terminal_defs, content_terminal="__CONTENT__")
+        self._lexer = IncrementalLexer(
+            config.lexer_shape, content_terminal="__CONTENT__"
+        )
 
         self._args_buffer: str = ""
         self._args_safe_end: int = 0
+        self._args_brace_depth = 0
+        self._args_in_string = False
+        self._args_escape_next = False
+
+    def reset(self, initial_state: ParserState | None = None) -> None:
+        """Reset mutable state for reuse across requests.
+
+        Preserves cached immutable structures (compiled terminals,
+        resolved token IDs, lexer shape, token text cache) to avoid
+        redundant initialization work.
+        """
+        self.state = (
+            initial_state if initial_state is not None else self.config.initial_state
+        )
+        self.tool_index = -1
+        self._ever_had_token_ids = False
+        self._scanner.reset()
+        self._lexer.buffer = ""
+        self._args_buffer = ""
+        self._args_safe_end = 0
         self._args_brace_depth = 0
         self._args_in_string = False
         self._args_escape_next = False

@@ -55,10 +55,17 @@ class TokenIDScanner:
         self._deferred_terminals: list[PreLexedTerminal] = []
         self._deferred_post_text: str = ""
 
+    def reset(self) -> None:
+        """Clear mutable state for reuse. Preserves the token text cache."""
+        self._deferred_terminals.clear()
+        self._deferred_post_text = ""
+
     def _decode_token(self, token_id: int) -> str:
         if token_id not in self._token_text_cache:
             self._token_text_cache[token_id] = self.tokenizer.decode([token_id])
         return self._token_text_cache[token_id]
+
+    _EMPTY: list[LexerInput] = []
 
     def scan(
         self,
@@ -78,16 +85,20 @@ class TokenIDScanner:
 
         has_special = False
         has_drop = False
+        token_id_to_terminal = self.token_id_to_terminal
+        drop_token_ids = self._drop_token_ids
         for tid in delta_token_ids:
-            if tid in self.token_id_to_terminal:
+            if tid in token_id_to_terminal:
                 has_special = True
-            if tid in self._drop_token_ids:
+            if tid in drop_token_ids:
                 has_drop = True
 
         if not has_special and not has_drop:
             if effective_text:
+                if not prefix_items:
+                    return [TextChunk(effective_text)]
                 prefix_items.append(TextChunk(effective_text))
-            return prefix_items
+            return prefix_items or self._EMPTY
 
         token_texts = [self._decode_token(tid) for tid in delta_token_ids]
 

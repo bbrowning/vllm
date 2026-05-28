@@ -110,9 +110,15 @@ def _qwen3xml_arg_converter(raw_args: str, partial: bool) -> str:
     return json.dumps(params, ensure_ascii=False)
 
 
+_QWEN3XML_CONFIG: GrammarConfig | None = None
+
+
 def qwen3xml_config() -> GrammarConfig:
     """Return the grammar config for Qwen3 XML tool calls (no reasoning)."""
-    return GrammarConfig(
+    global _QWEN3XML_CONFIG
+    if _QWEN3XML_CONFIG is not None:
+        return _QWEN3XML_CONFIG
+    _QWEN3XML_CONFIG = GrammarConfig(
         name="qwen3xml",
         terminals={
             "TOOL_START": TOOL_CALL_START,
@@ -156,11 +162,18 @@ def qwen3xml_config() -> GrammarConfig:
         strip_trailing_quotes=False,
         tool_args_json=False,
     )
+    return _QWEN3XML_CONFIG
+
+
+_QWEN3_CONFIG: GrammarConfig | None = None
 
 
 def qwen3_config() -> GrammarConfig:
     """Return the grammar config for Qwen3 reasoning + tool calls."""
-    return GrammarConfig(
+    global _QWEN3_CONFIG
+    if _QWEN3_CONFIG is not None:
+        return _QWEN3_CONFIG
+    _QWEN3_CONFIG = GrammarConfig(
         name="qwen3",
         initial_state=ParserState.REASONING,
         terminals={
@@ -227,6 +240,7 @@ def qwen3_config() -> GrammarConfig:
         strip_trailing_quotes=False,
         tool_args_json=False,
     )
+    return _QWEN3_CONFIG
 
 
 class Qwen3GrammarParser(GrammarParser):

@@ -69,7 +69,9 @@ class GrammarParser(Parser):
         super().__init__(tokenizer)
         self._tools = tools
         self.grammar_config = grammar_config
-        self._engine = StreamingParserEngine(grammar_config, tokenizer)
+        self._engine = StreamingParserEngine(
+            grammar_config, tokenizer, vocab=self.vocab
+        )
 
         self._reasoning_ended: bool = False
 
@@ -80,6 +82,10 @@ class GrammarParser(Parser):
         self._streamed_json: list[str] = []
         self._deferred_content: str = ""
         self._content_has_nonws: bool = False
+
+        self._arg_converter = grammar_config.arg_converter
+        self._arg_structural_chars = grammar_config.arg_structural_chars
+        self._strip_trailing_quotes = grammar_config.strip_trailing_quotes
 
         self._capture_tokens: list[list] | None = [] if _DUMP_PATH else None
         self._capture_deltas: list[DeltaMessage] | None = [] if _DUMP_PATH else None
@@ -120,11 +126,7 @@ class GrammarParser(Parser):
 
     def _reset(self, initial_state: ParserState | None = None) -> None:
         self.flush_capture()
-        self._engine = StreamingParserEngine(
-            self.grammar_config,
-            self.model_tokenizer,
-            initial_state=initial_state,
-        )
+        self._engine.reset(initial_state=initial_state)
         self._reasoning_ended = False
         self._tool_call_ids.clear()
         self._tool_names.clear()
@@ -538,6 +540,9 @@ class GrammarParser(Parser):
         events: list[SemanticEvent],
         finished: bool = False,
     ) -> DeltaMessage | None:
+        if not events and not self._deferred_content:
+            return None
+
         tool_call_deltas: list[DeltaToolCall] = []
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
@@ -702,14 +707,14 @@ class GrammarParser(Parser):
     # ── Arg conversion helpers (from GrammarToolParser) ───────────────
 
     def _compute_arg_delta(self, idx: int, raw_delta: str) -> str | None:
-        converter = self.grammar_config.arg_converter
+        converter = self._arg_converter
         if converter is None:
             return raw_delta
 
-        if not self.grammar_config.strip_trailing_quotes:
+        if not self._strip_trailing_quotes:
             return None
 
-        structural = self.grammar_config.arg_structural_chars
+        structural = self._arg_structural_chars
         if structural is not None and structural.isdisjoint(raw_delta):
             return None
 
@@ -743,7 +748,7 @@ class GrammarParser(Parser):
         return None
 
     def _flush_arg_converter(self, idx: int) -> str | None:
-        converter = self.grammar_config.arg_converter
+        converter = self._arg_converter
         if converter is None:
             return None
 

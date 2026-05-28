@@ -27,9 +27,15 @@ if TYPE_CHECKING:
     from vllm.tool_parsers.abstract_tool_parser import Tool
 
 
+_NEMOTRON_V3_CONFIG: GrammarConfig | None = None
+
+
 def nemotron_v3_config() -> GrammarConfig:
     """Return the grammar config for Nemotron V3 reasoning + tool calls."""
-    return dataclasses.replace(qwen3_config(), name="nemotron_v3")
+    global _NEMOTRON_V3_CONFIG
+    if _NEMOTRON_V3_CONFIG is None:
+        _NEMOTRON_V3_CONFIG = dataclasses.replace(qwen3_config(), name="nemotron_v3")
+    return _NEMOTRON_V3_CONFIG
 
 
 class NemotronV3GrammarParser(Qwen3GrammarParser):

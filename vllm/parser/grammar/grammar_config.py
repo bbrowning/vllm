@@ -21,6 +21,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum, auto
+from functools import cached_property
 
 from vllm.parser.grammar.events import EventType
 
@@ -96,3 +97,15 @@ class GrammarConfig:
     arg_structural_chars: frozenset[str] | None = None
 
     drop_tokens: set[str] = field(default_factory=set)
+
+    @cached_property
+    def terminal_defs(self):
+        from vllm.parser.grammar.incremental_lexer import terminals_from_literals
+
+        return terminals_from_literals(self.terminals)
+
+    @cached_property
+    def lexer_shape(self):
+        from vllm.parser.grammar.incremental_lexer import _LexerShape
+
+        return _LexerShape(self.terminal_defs)
