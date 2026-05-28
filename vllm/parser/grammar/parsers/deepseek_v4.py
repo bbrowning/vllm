@@ -32,6 +32,7 @@ immediately do not leak the tag into text content.
 
 from __future__ import annotations
 
+import functools
 import json
 from typing import TYPE_CHECKING
 
@@ -99,15 +100,10 @@ def _dsml_arg_converter(raw_args: str, partial: bool) -> str:
     return json.dumps(params, ensure_ascii=False)
 
 
-_DEEPSEEK_V4_CONFIGS: dict[bool, GrammarConfig] = {}
-
-
+@functools.cache
 def deepseek_v4_config(thinking: bool = False) -> GrammarConfig:
     """Return the grammar config for DeepSeek V4 reasoning + tool calls."""
-    cached = _DEEPSEEK_V4_CONFIGS.get(thinking)
-    if cached is not None:
-        return cached
-    config = GrammarConfig(
+    return GrammarConfig(
         name="deepseek_v4",
         initial_state=ParserState.REASONING if thinking else ParserState.CONTENT,
         terminals={
@@ -185,8 +181,6 @@ def deepseek_v4_config(thinking: bool = False) -> GrammarConfig:
         strip_trailing_quotes=False,
         tool_args_json=False,
     )
-    _DEEPSEEK_V4_CONFIGS[thinking] = config
-    return config
 
 
 class DeepSeekV4GrammarParser(GrammarParser):

@@ -29,7 +29,7 @@ class LexToken:
     value: str
 
 
-class _LexerShape:
+class LexerShape:
     """Immutable pre-computed data derived from terminal definitions.
 
     Created once per :class:`GrammarConfig` and shared across all
@@ -90,10 +90,10 @@ class IncrementalLexer:
         terminals: list[TerminalDef],
         content_terminal: str = "__CONTENT__",
     ) -> None:
-        if isinstance(terminals, _LexerShape):
+        if isinstance(terminals, LexerShape):
             shape = terminals
         else:
-            shape = _LexerShape(terminals)
+            shape = LexerShape(terminals)
         self._shape = shape
         self.terminals = shape.terminals
         self.content_terminal = content_terminal
@@ -132,16 +132,19 @@ class IncrementalLexer:
         tokens: list[LexToken] = []
         first_chars = self._literal_first_chars
         literals = self._literal_strings
+        regex_terminals = self._regex_terminals
+        content_terminal = self.content_terminal
+        has_only_literals = self._has_only_literals
 
         while self.buffer:
-            if self._has_only_literals and first_chars:
+            if has_only_literals and first_chars:
                 has_potential = False
                 for ch in self.buffer:
                     if ch in first_chars:
                         has_potential = True
                         break
                 if not has_potential:
-                    tokens.append(LexToken(self.content_terminal, self.buffer))
+                    tokens.append(LexToken(content_terminal, self.buffer))
                     self.buffer = ""
                     break
 
@@ -153,7 +156,7 @@ class IncrementalLexer:
                 ):
                     best_match = (name, lit, len(lit))
 
-            for tdef in self._regex_terminals:
+            for tdef in regex_terminals:
                 m = tdef.pattern.match(self.buffer)
                 if m and m.start() == 0:
                     matched = m.group()
@@ -174,12 +177,10 @@ class IncrementalLexer:
             else:
                 content_end = self._find_content_boundary()
                 if content_end > 0:
-                    tokens.append(
-                        LexToken(self.content_terminal, self.buffer[:content_end])
-                    )
+                    tokens.append(LexToken(content_terminal, self.buffer[:content_end]))
                     self.buffer = self.buffer[content_end:]
                 else:
-                    tokens.append(LexToken(self.content_terminal, self.buffer[0]))
+                    tokens.append(LexToken(content_terminal, self.buffer[0]))
                     self.buffer = self.buffer[1:]
 
         return tokens

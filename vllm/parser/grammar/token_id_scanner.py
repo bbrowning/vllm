@@ -65,13 +65,13 @@ class TokenIDScanner:
             self._token_text_cache[token_id] = self.tokenizer.decode([token_id])
         return self._token_text_cache[token_id]
 
-    _EMPTY: list[LexerInput] = []
+    _EMPTY: tuple[LexerInput, ...] = ()
 
     def scan(
         self,
         delta_text: str,
         delta_token_ids: Sequence[int],
-    ) -> list[LexerInput]:
+    ) -> Sequence[LexerInput]:
         prefix_items: list[LexerInput] = []
         effective_text = delta_text
 

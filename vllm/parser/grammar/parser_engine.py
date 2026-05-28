@@ -119,7 +119,7 @@ class StreamingParserEngine:
         self.tool_index = -1
         self._ever_had_token_ids = False
         self._scanner.reset()
-        self._lexer.buffer = ""
+        self._lexer.reset()
         self._args_buffer = ""
         self._args_safe_end = 0
         self._args_brace_depth = 0

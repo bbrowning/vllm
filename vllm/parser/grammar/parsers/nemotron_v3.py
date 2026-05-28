@@ -13,6 +13,7 @@ content is empty, reasoning and content are swapped.
 from __future__ import annotations
 
 import dataclasses
+import functools
 from typing import TYPE_CHECKING
 
 from vllm.parser.grammar.parsers.qwen3 import Qwen3GrammarParser, qwen3_config
@@ -27,15 +28,10 @@ if TYPE_CHECKING:
     from vllm.tool_parsers.abstract_tool_parser import Tool
 
 
-_NEMOTRON_V3_CONFIG: GrammarConfig | None = None
-
-
+@functools.cache
 def nemotron_v3_config() -> GrammarConfig:
     """Return the grammar config for Nemotron V3 reasoning + tool calls."""
-    global _NEMOTRON_V3_CONFIG
-    if _NEMOTRON_V3_CONFIG is None:
-        _NEMOTRON_V3_CONFIG = dataclasses.replace(qwen3_config(), name="nemotron_v3")
-    return _NEMOTRON_V3_CONFIG
+    return dataclasses.replace(qwen3_config(), name="nemotron_v3")
 
 
 class NemotronV3GrammarParser(Qwen3GrammarParser):

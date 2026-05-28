@@ -801,7 +801,7 @@ class GrammarParser(Parser):
             if not name and raw_body.strip():
                 name, args_json = self._extract_name_and_args(raw_body)
             elif raw_body.strip():
-                converter = self.grammar_config.arg_converter
+                converter = self._arg_converter
                 if converter is not None:
                     try:
                         args_json = converter(raw_body, False)

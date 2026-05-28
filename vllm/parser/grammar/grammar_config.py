@@ -106,6 +106,6 @@ class GrammarConfig:
 
     @cached_property
     def lexer_shape(self):
-        from vllm.parser.grammar.incremental_lexer import _LexerShape
+        from vllm.parser.grammar.incremental_lexer import LexerShape
 
-        return _LexerShape(self.terminal_defs)
+        return LexerShape(self.terminal_defs)
