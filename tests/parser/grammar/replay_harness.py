@@ -36,6 +36,7 @@ class Sample:
     expected_content: str | None
     expected_tool_calls: list[dict] | None
     tools: list[dict] | None = None
+    chat_template_kwargs: dict | None = None
 
 
 @dataclass
@@ -72,6 +73,7 @@ def load_samples_from_path(path: Path) -> list[Sample]:
                 expected_content=expected.get("content"),
                 expected_tool_calls=expected.get("tool_calls"),
                 tools=serving.get("tools"),
+                chat_template_kwargs=serving.get("chat_template_kwargs"),
             )
         )
     return samples

@@ -120,7 +120,11 @@ def _make_old_parser_factory(
     tool_cls = ToolParserManager.get_tool_parser(tool_parser_name)
     reasoning_cls = ReasoningParserManager.get_reasoning_parser(reasoning_parser_name)
 
-    def factory(tokenizer: Any, tools: list[dict] | None = None) -> Parser:
+    def factory(
+        tokenizer: Any,
+        tools: list[dict] | None = None,
+        **kwargs: Any,
+    ) -> Parser:
         # Enrich the mock tokenizer vocab so old parsers can look up
         # tokens that aren't in the sample data (e.g. <|turn>)
         original_vocab = tokenizer.get_vocab()
@@ -134,7 +138,7 @@ def _make_old_parser_factory(
                 "tool_parser_cls": tool_cls,
             },
         )
-        result = cls(tokenizer, tools)
+        result = cls(tokenizer, tools, **kwargs)
         # Restore original vocab for subsequent use
         tokenizer.get_vocab.return_value = original_vocab
         return result
@@ -146,8 +150,12 @@ def _make_new_parser_factory(parser_name: str) -> ParserFactory:
     """Create a factory that builds a unified grammar parser."""
     parser_cls = ParserManager.get_parser_internal(parser_name)
 
-    def factory(tokenizer: Any, tools: list[dict] | None = None) -> Parser:
-        return parser_cls(tokenizer, tools)
+    def factory(
+        tokenizer: Any,
+        tools: list[dict] | None = None,
+        **kwargs: Any,
+    ) -> Parser:
+        return parser_cls(tokenizer, tools, **kwargs)
 
     return factory
 
@@ -156,18 +164,47 @@ def smoke_test(
     factory: ParserFactory,
     sample: Sample,
     name: str,
-) -> bool:
-    """Run a single sample and check correctness. Returns True on pass."""
+) -> tuple[bool, str]:
+    """Run a single sample and check correctness.
+
+    Returns ``(True, "")`` on pass, ``(False, error_message)`` on failure.
+    Leading/trailing whitespace differences in reasoning and content are
+    tolerated since we are comparing parser *work*, not exact formatting.
+    """
     tokenizer = make_mock_tokenizer(sample)
-    parser = factory(tokenizer, sample.tools)
+    extra_kwargs = {}
+    if sample.chat_template_kwargs:
+        extra_kwargs["chat_template_kwargs"] = sample.chat_template_kwargs
+    parser = factory(tokenizer, sample.tools, **extra_kwargs)
     results = replay_streaming(parser, sample.tokens, chunk_size=1)
     output = collect_output(results)
+    output.reasoning = output.reasoning.strip()
+    output.content = output.content.strip()
+    trimmed_sample = Sample(
+        id=sample.id,
+        description=sample.description,
+        source=sample.source,
+        vocab=sample.vocab,
+        tokens=sample.tokens,
+        expected_reasoning=(
+            sample.expected_reasoning.strip()
+            if sample.expected_reasoning is not None
+            else None
+        ),
+        expected_content=(
+            sample.expected_content.strip()
+            if sample.expected_content is not None
+            else None
+        ),
+        expected_tool_calls=sample.expected_tool_calls,
+        tools=sample.tools,
+        chat_template_kwargs=sample.chat_template_kwargs,
+    )
     try:
-        assert_parse_output(output, sample)
-        return True
+        assert_parse_output(output, trimmed_sample)
+        return True, ""
     except AssertionError as e:
-        print(f"  WARNING: {name} failed smoke test on {sample.id}: {e}")
-        return False
+        return False, str(e)
 
 
 @dataclass
@@ -186,15 +223,18 @@ def time_sample(
 ) -> _RawTimings:
     """Time replay of a sample through a parser. Returns timing breakdown."""
     tokenizer = make_mock_tokenizer(sample)
+    extra_kwargs: dict[str, Any] = {}
+    if sample.chat_template_kwargs:
+        extra_kwargs["chat_template_kwargs"] = sample.chat_template_kwargs
 
     for _ in range(warmup):
-        parser = factory(tokenizer, sample.tools)
+        parser = factory(tokenizer, sample.tools, **extra_kwargs)
         replay_streaming(parser, sample.tokens, chunk_size=chunk_size)
 
     raw = _RawTimings()
     for _ in range(iterations):
         t0 = time.perf_counter()
-        parser = factory(tokenizer, sample.tools)
+        parser = factory(tokenizer, sample.tools, **extra_kwargs)
         t1 = time.perf_counter()
         results = replay_streaming(parser, sample.tokens, chunk_size=chunk_size)
         collect_output(results)
@@ -208,22 +248,36 @@ def time_sample(
 def print_comparison_table(
     results: dict[str, list[TimingResult]],
     parser_names: list[str],
+    all_sample_ids: list[str] | None = None,
 ) -> None:
-    """Print a per-sample timing comparison table."""
-    sample_ids: list[str] = []
-    seen = set()
-    for r_list in results.values():
-        for r in r_list:
-            if r.sample_id not in seen:
-                sample_ids.append(r.sample_id)
-                seen.add(r.sample_id)
+    """Print a per-sample timing comparison table.
 
+    When *all_sample_ids* is provided, every sample is shown even if some
+    parser+sample combinations failed the smoke test (displayed as FAIL).
+    Aggregate statistics only include samples where **all** parsers passed.
+    """
     lookup: dict[tuple[str, str], TimingResult] = {}
     for name, r_list in results.items():
         for r in r_list:
             lookup[(name, r.sample_id)] = r
 
-    name_width = max(len(sid) for sid in sample_ids)
+    if all_sample_ids is not None:
+        sample_ids = all_sample_ids
+    else:
+        sample_ids = []
+        seen: set[str] = set()
+        for r_list in results.values():
+            for r in r_list:
+                if r.sample_id not in seen:
+                    sample_ids.append(r.sample_id)
+                    seen.add(r.sample_id)
+
+    token_counts: dict[str, int] = {}
+    for r_list in results.values():
+        for r in r_list:
+            token_counts[r.sample_id] = r.token_count
+
+    name_width = max((len(sid) for sid in sample_ids), default=8)
     name_width = max(name_width, 8)
 
     col_width = 22
@@ -241,10 +295,9 @@ def print_comparison_table(
     print("-" * len(header))
 
     for sid in sample_ids:
-        first_result = next(
-            lookup[(n, sid)] for n in parser_names if (n, sid) in lookup
-        )
-        line = f"{sid:<{name_width}}  {first_result.token_count:>6}"
+        tok_count = token_counts.get(sid, 0)
+        tok_str = str(tok_count) if tok_count else "?"
+        line = f"{sid:<{name_width}}  {tok_str:>6}"
         medians: list[float] = []
         for name in parser_names:
             r = lookup.get((name, sid))
@@ -254,21 +307,34 @@ def print_comparison_table(
                 cell = f"{med:>8.1f} +/- {std:<7.1f}"
                 medians.append(med)
             else:
-                cell = f"{'N/A':>{col_width}}"
+                cell = f"{'FAIL':>{col_width}}"
                 medians.append(0.0)
             line += f"  {cell:>{col_width}}"
 
         if len(parser_names) == 2 and all(m > 0 for m in medians):
             speedup = medians[0] / medians[1]
             line += f"  {speedup:>7.2f}x"
+        elif len(parser_names) == 2:
+            line += f"  {'--':>8}"
         print(line)
 
     print("-" * len(header))
-    agg_line = f"{'AGGREGATE':<{name_width}}  {'':>6}"
+
+    common_ids = [
+        sid for sid in sample_ids if all((name, sid) in lookup for name in parser_names)
+    ]
+
+    n_excluded = len(sample_ids) - len(common_ids)
+    agg_label = "AGGREGATE"
+    if n_excluded:
+        agg_label += f" ({n_excluded} excluded)"
+
+    agg_line = f"{agg_label:<{name_width}}  {'':>6}"
     agg_medians: list[float] = []
     for name in parser_names:
-        r_list = results.get(name, [])
-        all_medians = [r.median_us for r in r_list]
+        all_medians = [
+            lookup[(name, sid)].median_us for sid in common_ids if (name, sid) in lookup
+        ]
         if all_medians:
             agg_med = statistics.median(all_medians)
             agg_mean = statistics.mean(all_medians)
@@ -328,12 +394,25 @@ def run_comparison(
 ) -> None:
     """Run the comparison benchmark."""
     parser_names = list(factories.keys())
+    all_sample_ids = [s.id for s in samples]
 
-    print("\nSmoke test:")
+    print("\nSmoke testing all parser+sample combinations...")
+    passed: set[tuple[str, str]] = set()
+    failed: list[tuple[str, str, str]] = []
     for name, factory in factories.items():
-        ok = smoke_test(factory, samples[0], name)
-        status = "PASS" if ok else "FAIL (proceeding with timing)"
-        print(f"  {name}: {status}")
+        for sample in samples:
+            ok, err = smoke_test(factory, sample, name)
+            if ok:
+                passed.add((name, sample.id))
+            else:
+                failed.append((name, sample.id, err))
+
+    n_total = len(factories) * len(samples)
+    print(f"  {len(passed)}/{n_total} passed")
+    if failed:
+        for pname, sid, err in failed:
+            first_line = err.split("\n", 1)[0]
+            print(f"  FAIL: {pname} x {sid}: {first_line}")
 
     print(
         f"\nBenchmarking {len(samples)} samples x {len(factories)} parsers "
@@ -344,6 +423,9 @@ def run_comparison(
     results: dict[str, list[TimingResult]] = {n: [] for n in parser_names}
     for sample in samples:
         for name, factory in factories.items():
+            if (name, sample.id) not in passed:
+                print(f"  {name}: {sample.id} -- SKIPPED (smoke test failed)")
+                continue
             raw = time_sample(factory, sample, iterations, warmup, chunk_size)
             results[name].append(
                 TimingResult(
@@ -361,7 +443,7 @@ def run_comparison(
                 f"median={med_us:.1f}us"
             )
 
-    print_comparison_table(results, parser_names)
+    print_comparison_table(results, parser_names, all_sample_ids)
     print_breakdown_table(results, parser_names)
 
 
