@@ -35,6 +35,7 @@ class Sample:
     expected_reasoning: str | None
     expected_content: str | None
     expected_tool_calls: list[dict] | None
+    tools: list[dict] | None = None
 
 
 @dataclass
@@ -46,9 +47,8 @@ class ParseOutput:
     tool_calls: list[dict] = field(default_factory=list)
 
 
-def load_samples(model: str) -> list[Sample]:
-    """Load all samples from ``tests/parser/grammar/data/{model}.jsonl``."""
-    path = DATA_DIR / f"{model}.jsonl"
+def load_samples_from_path(path: Path) -> list[Sample]:
+    """Load all samples from a JSONL file."""
     if not path.exists():
         return []
 
@@ -60,6 +60,7 @@ def load_samples(model: str) -> list[Sample]:
         data = json.loads(line)
         tokens = [(t[0], t[1]) for t in data["tokens"]]
         expected = data.get("expected", {})
+        serving = data.get("serving", {})
         samples.append(
             Sample(
                 id=data["id"],
@@ -70,9 +71,15 @@ def load_samples(model: str) -> list[Sample]:
                 expected_reasoning=expected.get("reasoning"),
                 expected_content=expected.get("content"),
                 expected_tool_calls=expected.get("tool_calls"),
+                tools=serving.get("tools"),
             )
         )
     return samples
+
+
+def load_samples(model: str) -> list[Sample]:
+    """Load all samples from ``tests/parser/grammar/data/{model}.jsonl``."""
+    return load_samples_from_path(DATA_DIR / f"{model}.jsonl")
 
 
 def make_mock_tokenizer(sample: Sample) -> MagicMock:
