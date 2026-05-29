@@ -18,6 +18,7 @@ from vllm.entrypoints.openai.chat_completion.protocol import (
     ChatCompletionRequest,
 )
 from vllm.entrypoints.openai.engine.protocol import DeltaMessage
+from vllm.parser.grammar.unified_parser import accumulate_deltas
 
 DATA_DIR = Path(__file__).parent / "data"
 
@@ -297,49 +298,12 @@ def replay_with_text_holdback(
 
 def collect_output(results: list[DeltaMessage | None]) -> ParseOutput:
     """Accumulate ``DeltaMessage`` results into a :class:`ParseOutput`."""
-    output = ParseOutput()
-    reasoning_parts: list[str] = []
-    content_parts: list[str] = []
-
-    for r in results:
-        if r is None:
-            continue
-        if r.reasoning:
-            reasoning_parts.append(r.reasoning)
-        if r.content:
-            content_parts.append(r.content)
-        if r.tool_calls:
-            for tc in r.tool_calls:
-                if tc.function and tc.function.name:
-                    existing = None
-                    for existing_tc in output.tool_calls:
-                        if existing_tc.get("_index") == tc.index:
-                            existing = existing_tc
-                            break
-
-                    if existing is None:
-                        output.tool_calls.append(
-                            {
-                                "_index": tc.index,
-                                "name": tc.function.name,
-                                "arguments": tc.function.arguments or "",
-                            }
-                        )
-                    else:
-                        existing["arguments"] += tc.function.arguments or ""
-                elif tc.function and tc.function.arguments:
-                    for existing_tc in output.tool_calls:
-                        if existing_tc.get("_index") == tc.index:
-                            existing_tc["arguments"] += tc.function.arguments
-                            break
-
-    output.reasoning = "".join(reasoning_parts)
-    output.content = "".join(content_parts)
-
-    for tc in output.tool_calls:
-        tc.pop("_index", None)
-
-    return output
+    result = accumulate_deltas(results)
+    return ParseOutput(
+        reasoning=result["reasoning"],
+        content=result["content"],
+        tool_calls=result["tool_calls"],
+    )
 
 
 def assert_parse_output(actual: ParseOutput, sample: Sample) -> None:

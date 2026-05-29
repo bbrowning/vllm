@@ -51,6 +51,126 @@ logger = init_logger(__name__)
 _DUMP_PATH = os.environ.get("VLLM_DUMP_PARSER_TOKENS")
 
 
+def accumulate_deltas(
+    deltas: Sequence[DeltaMessage | None],
+) -> dict:
+    """Accumulate a sequence of ``DeltaMessage`` into a summary dict.
+
+    Returns ``{"reasoning": str, "content": str, "tool_calls": [...]}``.
+    Tool-call dicts have ``"name"`` and ``"arguments"`` (raw string) keys.
+    """
+    reasoning_parts: list[str] = []
+    content_parts: list[str] = []
+    tool_calls_by_idx: dict[int, dict] = {}
+
+    for delta in deltas:
+        if delta is None:
+            continue
+        if delta.reasoning:
+            reasoning_parts.append(delta.reasoning)
+        if delta.content:
+            content_parts.append(delta.content)
+        if delta.tool_calls:
+            for tc in delta.tool_calls:
+                if tc.function and tc.function.name:
+                    existing = tool_calls_by_idx.get(tc.index)
+                    if existing is None:
+                        tool_calls_by_idx[tc.index] = {
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments or "",
+                        }
+                    else:
+                        existing["arguments"] += tc.function.arguments or ""
+                elif tc.function and tc.function.arguments:
+                    existing = tool_calls_by_idx.get(tc.index)
+                    if existing is not None:
+                        existing["arguments"] += tc.function.arguments
+
+    return {
+        "reasoning": "".join(reasoning_parts),
+        "content": "".join(content_parts),
+        "tool_calls": list(tool_calls_by_idx.values()),
+    }
+
+
+class TokenCapture:
+    """Records token IDs and deltas for ``VLLM_DUMP_PARSER_TOKENS``."""
+
+    def __init__(
+        self,
+        config_name: str,
+        dump_path: str,
+        grammar_config: GrammarConfig,
+        vocab: dict[str, int],
+        tokenizer,
+    ) -> None:
+        self._config_name = config_name
+        self._dump_path = dump_path
+        self._grammar_config = grammar_config
+        self._vocab = vocab
+        self._tokenizer = tokenizer
+        self.tokens: list[list] = []
+        self.deltas: list[DeltaMessage] = []
+        logger.info("Token capture enabled for %s -> %s", config_name, dump_path)
+
+    def flush(self) -> None:
+        if not self.tokens:
+            return
+
+        vocab_capture: dict[str, int] = {}
+        for text in self._grammar_config.token_id_terminals.values():
+            tid = self._vocab.get(text)
+            if tid is not None:
+                vocab_capture[text] = tid
+
+        token_decode_map: dict[int, str] = {}
+        for tid_text in self.tokens:
+            tid = tid_text[0]
+            if tid in token_decode_map:
+                continue
+            decoded = self._tokenizer.decode([tid])
+            token_decode_map[tid] = decoded
+            tid_text[1] = decoded
+
+        text = "".join(t[1] for t in self.tokens)
+        parsed = self._merge_deltas() if self.deltas else None
+
+        record = {
+            "id": f"{self._config_name}-capture-auto",
+            "description": "auto-captured from live model run",
+            "source": "VLLM_DUMP_PARSER_TOKENS",
+            "vocab": vocab_capture,
+            "tokens": self.tokens,
+            "text": text,
+            "parsed": parsed,
+        }
+
+        with open(self._dump_path, "a") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+        logger.info("Flushed %d tokens to %s", len(self.tokens), self._dump_path)
+        self.tokens = []
+        self.deltas = []
+
+    def _merge_deltas(self) -> dict:
+        result = accumulate_deltas(self.deltas)
+        for tc in result["tool_calls"]:
+            args_str = tc.get("arguments", "")
+            if args_str:
+                with contextlib.suppress(json.JSONDecodeError, ValueError):
+                    tc["arguments"] = json.loads(args_str)
+        reasoning = result["reasoning"] or None
+        content_str = result["content"]
+        if result["tool_calls"]:
+            content_str = content_str.strip()
+        content = content_str or None
+        return {
+            "reasoning": reasoning,
+            "content": content,
+            "tool_calls": result["tool_calls"],
+        }
+
+
 class GrammarParser(Parser):
     """A :class:`Parser` backed by a single declarative grammar config.
 
@@ -87,14 +207,17 @@ class GrammarParser(Parser):
         self._arg_structural_chars = grammar_config.arg_structural_chars
         self._strip_trailing_quotes = grammar_config.strip_trailing_quotes
 
-        self._capture_tokens: list[list] | None = [] if _DUMP_PATH else None
-        self._capture_deltas: list[DeltaMessage] | None = [] if _DUMP_PATH else None
-        if self._capture_tokens is not None:
-            logger.info(
-                "Token capture enabled for %s -> %s",
+        self._capture: TokenCapture | None = (
+            TokenCapture(
                 grammar_config.name,
                 _DUMP_PATH,
+                grammar_config,
+                self.vocab,
+                tokenizer,
             )
+            if _DUMP_PATH
+            else None
+        )
 
         vocab = self.vocab
         self._reasoning_start_token_id: int | None = None
@@ -119,13 +242,11 @@ class GrammarParser(Parser):
     def vocab(self) -> dict[str, int]:
         return self.model_tokenizer.get_vocab()
 
-    def __del__(self) -> None:
-        self.flush_capture()
-
     # ── Engine lifecycle ──────────────────────────────────────────────
 
     def _reset(self, initial_state: ParserState | None = None) -> None:
-        self.flush_capture()
+        if self._capture is not None:
+            self._capture.flush()
         self._engine.reset(initial_state=initial_state)
         self._reasoning_ended = False
         self._tool_call_ids.clear()
@@ -194,125 +315,19 @@ class GrammarParser(Parser):
         prompt_token_ids: list[int] | None = None,
         finished: bool = False,
     ) -> DeltaMessage | None:
-        if self._capture_tokens is not None:
+        capture = self._capture
+        if capture is not None:
             for tid in delta_token_ids:
-                self._capture_tokens.append([tid, ""])
+                capture.tokens.append([tid, ""])
         events = self._engine.feed(delta_text, delta_token_ids)
         if finished:
             events.extend(self._engine.finish())
         result = self._events_to_delta(events, finished=finished)
-        if self._capture_deltas is not None and result is not None:
-            self._capture_deltas.append(result)
-        if finished:
-            self.flush_capture()
+        if capture is not None and result is not None:
+            capture.deltas.append(result)
+        if finished and capture is not None:
+            capture.flush()
         return result
-
-    def flush_capture(self) -> None:
-        """Write captured token sequence to the dump file.
-
-        Call at end of stream to write the accumulated tokens and
-        parse result to the JSONL file specified by
-        ``VLLM_DUMP_PARSER_TOKENS``.
-        """
-        if _DUMP_PATH is None or self._capture_tokens is None:
-            return
-        if not self._capture_tokens:
-            return
-
-        vocab_capture: dict[str, int] = {}
-        full_vocab = self.vocab
-        for text in self.grammar_config.token_id_terminals.values():
-            tid = full_vocab.get(text)
-            if tid is not None:
-                vocab_capture[text] = tid
-
-        token_decode_map: dict[int, str] = {}
-        for tid_text in self._capture_tokens:
-            tid = tid_text[0]
-            if tid in token_decode_map:
-                continue
-            decoded = self.model_tokenizer.decode([tid])
-            token_decode_map[tid] = decoded
-            tid_text[1] = decoded
-
-        for tid_text in self._capture_tokens:
-            tid_text[1] = token_decode_map.get(tid_text[0], "")
-
-        text = "".join(t[1] for t in self._capture_tokens)
-        parsed = self._merge_captured_deltas() if self._capture_deltas else None
-
-        record = {
-            "id": f"{self.grammar_config.name}-capture-auto",
-            "description": "auto-captured from live model run",
-            "source": "VLLM_DUMP_PARSER_TOKENS",
-            "vocab": vocab_capture,
-            "tokens": self._capture_tokens,
-            "text": text,
-            "parsed": parsed,
-        }
-
-        with open(_DUMP_PATH, "a") as f:
-            f.write(json.dumps(record, ensure_ascii=False) + "\n")
-
-        logger.info(
-            "Flushed %d tokens to %s",
-            len(self._capture_tokens),
-            _DUMP_PATH,
-        )
-        self._capture_tokens = []
-        self._capture_deltas = []
-
-    def _merge_captured_deltas(self) -> dict:
-        """Merge accumulated ``DeltaMessage`` results into a parsed record."""
-        reasoning_parts: list[str] = []
-        content_parts: list[str] = []
-        tool_calls: list[dict] = []
-
-        for delta in self._capture_deltas:  # type: ignore[union-attr]
-            if delta.reasoning:
-                reasoning_parts.append(delta.reasoning)
-            if delta.content:
-                content_parts.append(delta.content)
-            for tc in delta.tool_calls:
-                if tc.function and tc.function.name:
-                    existing = None
-                    for etx in tool_calls:
-                        if etx.get("_idx") == tc.index:
-                            existing = etx
-                            break
-                    if existing is None:
-                        tool_calls.append(
-                            {
-                                "_idx": tc.index,
-                                "name": tc.function.name,
-                                "arguments": tc.function.arguments or "",
-                            }
-                        )
-                    else:
-                        existing["arguments"] += tc.function.arguments or ""
-                elif tc.function and tc.function.arguments:
-                    for etx in tool_calls:
-                        if etx.get("_idx") == tc.index:
-                            etx["arguments"] += tc.function.arguments
-                            break
-
-        for tc in tool_calls:
-            tc.pop("_idx", None)
-            args_str = tc.get("arguments", "")
-            if args_str:
-                with contextlib.suppress(json.JSONDecodeError, ValueError):
-                    tc["arguments"] = json.loads(args_str)
-
-        reasoning = "".join(reasoning_parts) or None
-        content_str = "".join(content_parts)
-        if tool_calls:
-            content_str = content_str.strip()
-        content = content_str or None
-        return {
-            "reasoning": reasoning,
-            "content": content,
-            "tool_calls": tool_calls if tool_calls else [],
-        }
 
     # ── Non-streaming: extract_reasoning ──────────────────────────────
 
