@@ -5,7 +5,6 @@
 Uses gemma4_config for all end-to-end engine tests, covering
 reasoning channels, tool calls, and combined flows."""
 
-import importlib.util
 from unittest.mock import MagicMock
 
 import pytest
@@ -15,16 +14,6 @@ from vllm.parser.engine.token_id_scanner import (
     PreLexedTerminal,
     TextChunk,
     TokenIDScanner,
-)
-
-try:
-    _gemma4_spec = importlib.util.find_spec("vllm.parser.engine.parsers.gemma4")
-except (ModuleNotFoundError, ValueError):
-    _gemma4_spec = None
-
-_needs_gemma4 = pytest.mark.skipif(
-    _gemma4_spec is None,
-    reason="Gemma4 parser config not yet available",
 )
 
 CHANNEL_START = "<|channel>"
@@ -303,7 +292,6 @@ class TestDropTokens:
         assert len(scanner.flush_pending()) == 0
 
 
-@_needs_gemma4
 class TestEndToEndReasoningHoldback:
     """End-to-end tests through the full parser engine simulating
     stream-interval > 1 and detokenizer hold-back, using
@@ -313,7 +301,6 @@ class TestEndToEndReasoningHoldback:
         from vllm.parser.engine.parsers.gemma4 import (
             gemma4_config,
         )
-
         from vllm.parser.engine.streaming_parser_engine import StreamingParserEngine
 
         config = gemma4_config()
@@ -379,7 +366,6 @@ class TestEndToEndReasoningHoldback:
         from vllm.parser.engine.parsers.gemma4 import (
             gemma4_config,
         )
-
         from vllm.parser.engine.streaming_parser_engine import StreamingParserEngine
 
         config = gemma4_config()
@@ -505,7 +491,6 @@ def _has_event(events, event_type) -> bool:
     return any(e.type == event_type for e in events)
 
 
-@_needs_gemma4
 class TestMultiTokenBoundaryPreservation:
     """End-to-end tests verifying no text is lost at state boundaries
     when multiple tokens arrive per delta with detokenizer holdback.
@@ -525,7 +510,6 @@ class TestMultiTokenBoundaryPreservation:
         from vllm.parser.engine.parsers.gemma4 import (
             gemma4_config,
         )
-
         from vllm.parser.engine.streaming_parser_engine import StreamingParserEngine
 
         tok = _make_gemma4_tokenizer()
@@ -558,7 +542,6 @@ class TestMultiTokenBoundaryPreservation:
         from vllm.parser.engine.parsers.gemma4 import (
             gemma4_config,
         )
-
         from vllm.parser.engine.streaming_parser_engine import StreamingParserEngine
 
         tok = _make_gemma4_tokenizer()
@@ -588,7 +571,6 @@ class TestMultiTokenBoundaryPreservation:
         from vllm.parser.engine.parsers.gemma4 import (
             gemma4_config,
         )
-
         from vllm.parser.engine.streaming_parser_engine import StreamingParserEngine
 
         tok = _make_gemma4_tokenizer()
@@ -629,7 +611,6 @@ class TestMultiTokenBoundaryPreservation:
         from vllm.parser.engine.parsers.gemma4 import (
             gemma4_config,
         )
-
         from vllm.parser.engine.streaming_parser_engine import StreamingParserEngine
 
         tok = _make_gemma4_tokenizer()
@@ -670,7 +651,6 @@ class TestMultiTokenBoundaryPreservation:
         from vllm.parser.engine.parsers.gemma4 import (
             gemma4_config,
         )
-
         from vllm.parser.engine.streaming_parser_engine import StreamingParserEngine
 
         tok = _make_gemma4_tokenizer()
@@ -701,7 +681,6 @@ class TestMultiTokenBoundaryPreservation:
         assert "Tokyo" in _arg_text(events)
 
 
-@_needs_gemma4
 class TestStreamInterval10:
     """Tests that model ``--stream-interval 10`` behavior.
 
@@ -725,7 +704,6 @@ class TestStreamInterval10:
         from vllm.parser.engine.parsers.gemma4 import (
             gemma4_config,
         )
-
         from vllm.parser.engine.streaming_parser_engine import StreamingParserEngine
 
         tok = _make_gemma4_tokenizer({_TOK[i]: f"word{i} " for i in range(15)})
@@ -794,7 +772,6 @@ class TestStreamInterval10:
         from vllm.parser.engine.parsers.gemma4 import (
             gemma4_config,
         )
-
         from vllm.parser.engine.streaming_parser_engine import StreamingParserEngine
 
         tok = _make_gemma4_tokenizer({_TOK[i]: f"w{i} " for i in range(15)})
@@ -859,7 +836,6 @@ class TestStreamInterval10:
         from vllm.parser.engine.parsers.gemma4 import (
             gemma4_config,
         )
-
         from vllm.parser.engine.streaming_parser_engine import StreamingParserEngine
 
         tok = _make_gemma4_tokenizer({_TOK[i]: f"word{i} " for i in range(15)})
@@ -938,7 +914,6 @@ class TestStreamInterval10:
         from vllm.parser.engine.parsers.gemma4 import (
             gemma4_config,
         )
-
         from vllm.parser.engine.streaming_parser_engine import StreamingParserEngine
 
         tok = _make_gemma4_tokenizer({_TOK[i]: f"w{i}" for i in range(15)})
@@ -1016,7 +991,6 @@ class TestStreamInterval10:
         from vllm.parser.engine.parsers.gemma4 import (
             gemma4_config,
         )
-
         from vllm.parser.engine.streaming_parser_engine import StreamingParserEngine
 
         tok = _make_gemma4_tokenizer({_TOK[i]: f"w{i} " for i in range(15)})

@@ -10,8 +10,20 @@ streaming, ambiguity buffering, token-ID mapping, and delta computation.
 """
 
 from vllm.parser.engine.events import EventType, SemanticEvent
+from vllm.parser.engine.parsers.deepseek_v4 import DeepSeekV4Parser
+from vllm.parser.engine.parsers.gemma4 import Gemma4Parser
+from vllm.parser.engine.parsers.nemotron_v3 import NemotronV3Parser
+from vllm.parser.engine.parsers.qwen3 import (
+    Qwen3Parser,
+    Qwen3XMLParser,
+)
 
 __all__ = [
+    "DeepSeekV4Parser",
     "EventType",
+    "Gemma4Parser",
+    "NemotronV3Parser",
+    "Qwen3Parser",
+    "Qwen3XMLParser",
     "SemanticEvent",
 ]

@@ -1,0 +1,672 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+"""Tests for the engine-based Qwen3 XML tool call parser.
+
+These mirror the test cases from test_qwen3xml_tool_parser.py to validate
+that the engine-driven parser produces identical results.
+"""
+
+import json
+from unittest.mock import MagicMock
+
+import pytest
+
+from tests.parser.engine.conftest import make_mock_tokenizer
+from tests.parser.engine.streaming_helpers import (
+    collect_content,
+    collect_function_name,
+    collect_tool_arguments,
+    simulate_tool_streaming,
+)
+from vllm.parser.engine.parser_engine import ParserEngine
+from vllm.parser.engine.parsers.qwen3 import (
+    TOOL_CALL_END,
+    TOOL_CALL_START,
+    qwen3xml_config,
+)
+
+
+@pytest.fixture
+def mock_tokenizer():
+    return make_mock_tokenizer(
+        {
+            TOOL_CALL_START: 100,
+            TOOL_CALL_END: 101,
+        }
+    )
+
+
+@pytest.fixture
+def parser(mock_tokenizer):
+    return ParserEngine(
+        mock_tokenizer,
+        parser_engine_config=qwen3xml_config(),
+    )
+
+
+class TestNonStreaming:
+    def test_no_tool_calls(self, parser, mock_request):
+        result = parser.extract_tool_calls(
+            "This is a regular response without any tool calls.",
+            mock_request,
+        )
+        assert result.tools_called is False
+        assert result.tool_calls == []
+        assert result.content == ("This is a regular response without any tool calls.")
+
+    def test_single_tool_call(self, parser, mock_request):
+        text = (
+            "<tool_call>\n"
+            "<function=get_weather>\n"
+            "<parameter=city>Tokyo</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+        result = parser.extract_tool_calls(text, mock_request)
+
+        assert result.tools_called is True
+        assert len(result.tool_calls) == 1
+        assert result.tool_calls[0].function.name == "get_weather"
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args == {"city": "Tokyo"}
+
+    def test_parallel_tool_calls(self, parser, mock_request):
+        text = (
+            "<tool_call>\n"
+            "<function=get_weather>\n"
+            "<parameter=city>Tokyo</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+            "<tool_call>\n"
+            "<function=get_time>\n"
+            "<parameter=timezone>Asia/Tokyo</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+        result = parser.extract_tool_calls(text, mock_request)
+
+        assert result.tools_called is True
+        assert len(result.tool_calls) == 2
+        assert result.tool_calls[0].function.name == "get_weather"
+        assert result.tool_calls[1].function.name == "get_time"
+
+        args0 = json.loads(result.tool_calls[0].function.arguments)
+        assert args0 == {"city": "Tokyo"}
+        args1 = json.loads(result.tool_calls[1].function.arguments)
+        assert args1 == {"timezone": "Asia/Tokyo"}
+
+    def test_various_data_types(self, parser, mock_request):
+        text = (
+            "<tool_call>\n<function=test_function>\n"
+            "<parameter=string_field>hello</parameter>\n"
+            "<parameter=int_field>42</parameter>\n"
+            "<parameter=float_field>3.14</parameter>\n"
+            "<parameter=bool_field>true</parameter>\n"
+            "<parameter=null_field>null</parameter>\n"
+            '<parameter=array_field>["a", "b", "c"]</parameter>\n'
+            '<parameter=object_field>{"nested": "value"}</parameter>\n'
+            "</function>\n</tool_call>"
+        )
+        result = parser.extract_tool_calls(text, mock_request)
+
+        assert result.tools_called is True
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args["string_field"] == "hello"
+        assert args["int_field"] == 42
+        assert args["float_field"] == 3.14
+        assert args["bool_field"] is True
+        assert args["null_field"] is None
+        assert args["array_field"] == ["a", "b", "c"]
+        assert args["object_field"] == {"nested": "value"}
+
+    def test_empty_arguments(self, parser, mock_request):
+        text = "<tool_call>\n<function=refresh>\n</function>\n</tool_call>"
+        result = parser.extract_tool_calls(text, mock_request)
+
+        assert result.tools_called is True
+        assert result.tool_calls[0].function.name == "refresh"
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args == {}
+
+    def test_surrounding_text(self, parser, mock_request):
+        text = (
+            "Let me check the weather for you.\n\n"
+            "<tool_call>\n<function=get_weather>\n"
+            "<parameter=city>Tokyo</parameter>\n"
+            "</function>\n</tool_call>\n\n"
+            "I will get that information."
+        )
+        result = parser.extract_tool_calls(text, mock_request)
+
+        assert result.tools_called is True
+        assert result.content is not None
+        assert "Let me check the weather" in result.content
+        assert result.tool_calls[0].function.name == "get_weather"
+
+    def test_escaped_strings(self, parser, mock_request):
+        text = (
+            "<tool_call>\n<function=test_function>\n"
+            '<parameter=quoted>He said "hello"</parameter>\n'
+            "<parameter=path>C:\\Users\\file.txt</parameter>\n"
+            "<parameter=newline>line1\nline2</parameter>\n"
+            "</function>\n</tool_call>"
+        )
+        result = parser.extract_tool_calls(text, mock_request)
+
+        assert result.tools_called is True
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args["quoted"] == 'He said "hello"'
+        assert args["path"] == "C:\\Users\\file.txt"
+        assert args["newline"] == "line1\nline2"
+
+    def test_multiple_parameters(self, parser, mock_request):
+        text = (
+            "<tool_call>\n<function=search>\n"
+            "<parameter=query>vllm parsing</parameter>\n"
+            "<parameter=limit>10</parameter>\n"
+            "<parameter=exact_match>false</parameter>\n"
+            "</function>\n</tool_call>"
+        )
+        result = parser.extract_tool_calls(text, mock_request)
+
+        assert result.tools_called is True
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args == {
+            "query": "vllm parsing",
+            "limit": 10,
+            "exact_match": False,
+        }
+
+    def test_multiline_param_values(self, parser, mock_request):
+        """Parameter values spanning multiple lines."""
+        text = (
+            "<tool_call>\n"
+            "<function=Bash>\n"
+            "<parameter=command>\n"
+            "ls -la /tmp\n"
+            "</parameter>\n"
+            "<parameter=description>\n"
+            "List files in /tmp directory\n"
+            "</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+        result = parser.extract_tool_calls(text, mock_request)
+
+        assert result.tools_called is True
+        assert len(result.tool_calls) == 1
+        assert result.tool_calls[0].function.name == "Bash"
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args["command"] == "ls -la /tmp"
+        assert args["description"] == "List files in /tmp directory"
+
+    def test_multiline_two_tool_calls(self, parser, mock_request):
+        """Two tool calls with multi-line parameter values (bug report)."""
+        text = (
+            "<tool_call>\n"
+            "<function=Bash>\n"
+            "<parameter=command>\n"
+            "find /workspace -name '*.py' | head -20\n"
+            "</parameter>\n"
+            "<parameter=description>\n"
+            "Find Python files\n"
+            "</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+            "<tool_call>\n"
+            "<function=Read>\n"
+            "<parameter=file_path>\n"
+            "/workspace/main.py\n"
+            "</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+        result = parser.extract_tool_calls(text, mock_request)
+
+        assert result.tools_called is True
+        assert len(result.tool_calls) == 2
+        assert result.tool_calls[0].function.name == "Bash"
+        assert result.tool_calls[1].function.name == "Read"
+        args0 = json.loads(result.tool_calls[0].function.arguments)
+        assert "find /workspace" in args0["command"]
+        assert "Find Python files" in args0["description"]
+        args1 = json.loads(result.tool_calls[1].function.arguments)
+        assert "/workspace/main.py" in args1["file_path"]
+
+    def test_nested_json_array_parameter(self, parser, mock_request):
+        text = (
+            "<tool_call>\n"
+            "<function=AskUserQuestion>\n"
+            "<parameter=questions>"
+            '[{"question": "Pick a color",'
+            ' "multiSelect": false, "answer": null}]'
+            "</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+        result = parser.extract_tool_calls(text, mock_request)
+
+        assert result.tools_called is True
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args == {
+            "questions": [
+                {
+                    "question": "Pick a color",
+                    "multiSelect": False,
+                    "answer": None,
+                }
+            ]
+        }
+
+
+class TestStreaming:
+    def test_basic_streaming(self, parser, mock_request):
+        chunks = [
+            "<tool_call>\n",
+            "<function=get_weather>\n",
+            "<parameter=city>Tokyo",
+            "</parameter>\n",
+            "</function>\n",
+            "</tool_call>",
+        ]
+
+        results = simulate_tool_streaming(parser, mock_request, chunks)
+
+        name = collect_function_name(results)
+        assert name == "get_weather"
+
+        args_text = collect_tool_arguments(results)
+        assert args_text
+        parsed = json.loads(args_text)
+        assert parsed == {"city": "Tokyo"}
+
+    def test_streaming_multi_param(self, parser, mock_request):
+        chunks = [
+            "<tool_call>\n",
+            "<function=get_weather>\n",
+            "<parameter=city>Tokyo</parameter>\n",
+            "<parameter=unit>celsius</parameter>\n",
+            "</function>\n",
+            "</tool_call>",
+        ]
+
+        results = simulate_tool_streaming(parser, mock_request, chunks)
+
+        name = collect_function_name(results)
+        assert name == "get_weather"
+
+        args_text = collect_tool_arguments(results)
+        assert args_text
+        parsed = json.loads(args_text)
+        assert parsed == {"city": "Tokyo", "unit": "celsius"}
+
+    def test_streaming_text_before_tool(self, parser, mock_request):
+        chunks = [
+            "Let me check ",
+            "the weather. ",
+            "<tool_call>\n",
+            "<function=get_weather>\n",
+            "<parameter=city>Tokyo</parameter>\n",
+            "</function>\n",
+            "</tool_call>",
+        ]
+
+        results = simulate_tool_streaming(parser, mock_request, chunks)
+        assert collect_content(results).strip().startswith("Let me check")
+
+    def test_streaming_empty_args(self, parser, mock_request):
+        chunks = [
+            "<tool_call>\n",
+            "<function=refresh>\n",
+            "</function>\n",
+            "</tool_call>",
+        ]
+
+        results = simulate_tool_streaming(parser, mock_request, chunks)
+
+        name = collect_function_name(results)
+        assert name == "refresh"
+
+    def test_streaming_split_parameter_tag(self, parser, mock_request):
+        """Parameter tag split across chunks."""
+        chunks = [
+            "<tool_call>\n",
+            "<function=test>\n",
+            "<parameter=",
+            "name>Alice",
+            "</parameter>\n",
+            "</function>\n",
+            "</tool_call>",
+        ]
+
+        results = simulate_tool_streaming(parser, mock_request, chunks)
+
+        name = collect_function_name(results)
+        assert name == "test"
+
+        args_text = collect_tool_arguments(results)
+        assert args_text
+        parsed = json.loads(args_text)
+        assert parsed["name"] == "Alice"
+
+    def test_streaming_numeric_values(self, parser, mock_request):
+        chunks = [
+            "<tool_call>\n",
+            "<function=set_config>\n",
+            "<parameter=count>42</parameter>\n",
+            "<parameter=active>true</parameter>\n",
+            "</function>\n",
+            "</tool_call>",
+        ]
+
+        results = simulate_tool_streaming(parser, mock_request, chunks)
+        args_text = collect_tool_arguments(results)
+        if args_text:
+            parsed = json.loads(args_text)
+            assert parsed["count"] == 42
+            assert parsed["active"] is True
+
+    def test_streaming_parallel_calls(self, parser, mock_request):
+        chunks = [
+            "<tool_call>\n",
+            "<function=get_weather>\n",
+            "<parameter=city>Tokyo</parameter>\n",
+            "</function>\n",
+            "</tool_call>",
+            "<tool_call>\n",
+            "<function=get_time>\n",
+            "<parameter=tz>JST</parameter>\n",
+            "</function>\n",
+            "</tool_call>",
+        ]
+
+        results = simulate_tool_streaming(parser, mock_request, chunks)
+
+        names = []
+        for delta, _ in results:
+            if delta and delta.tool_calls:
+                for tc in delta.tool_calls:
+                    if tc.function and tc.function.name:
+                        names.append(tc.function.name)
+
+        assert "get_weather" in names
+        assert "get_time" in names
+
+    def test_streaming_value_split_across_chunks(self, parser, mock_request):
+        """Parameter value split across multiple chunks."""
+        chunks = [
+            "<tool_call>\n",
+            "<function=search>\n",
+            "<parameter=query>hello ",
+            "world",
+            " test</parameter>\n",
+            "</function>\n",
+            "</tool_call>",
+        ]
+
+        results = simulate_tool_streaming(parser, mock_request, chunks)
+
+        args_text = collect_tool_arguments(results)
+        assert args_text
+        parsed = json.loads(args_text)
+        assert parsed["query"] == "hello world test"
+
+    def test_streaming_split_tool_call_tag(self, parser, mock_request):
+        """<tool_call> arrives as a single special token; the rest of
+        the content is split into fine-grained chunks."""
+        chunks = [
+            "<tool_call>\n",
+            "<function=test>\n",
+            "<parameter=x>1",
+            "</parameter>\n",
+            "</function>\n",
+            "</tool_call>",
+        ]
+        results = simulate_tool_streaming(parser, mock_request, chunks)
+
+        name = collect_function_name(results)
+        assert name == "test"
+
+        args_text = collect_tool_arguments(results)
+        assert args_text
+        parsed = json.loads(args_text)
+        assert parsed["x"] == 1
+
+    def test_char_by_char_streaming(self, mock_request):
+        """Feed text character-by-character to test lexer robustness.
+
+        Uses a tokenizer without special token IDs because char-by-char
+        delivery only occurs when the tokenizer splits the tag across
+        multiple sub-word tokens (i.e., no dedicated special token).
+        """
+        tokenizer = MagicMock()
+        tokenizer.encode.return_value = [1, 2, 3]
+        tokenizer.get_vocab.return_value = {}
+        tokenizer.decode.side_effect = lambda ids: "".join(
+            chr(i) if i < 128 else f"<{i}>" for i in ids
+        )
+        no_tid_parser = ParserEngine(tokenizer, parser_engine_config=qwen3xml_config())
+
+        full_text = (
+            "<tool_call>\n"
+            "<function=echo>\n"
+            "<parameter=msg>hi</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+        chunks = list(full_text)
+        results = simulate_tool_streaming(no_tid_parser, mock_request, chunks)
+
+        name = collect_function_name(results)
+        assert name == "echo"
+
+        args_text = collect_tool_arguments(results)
+        assert args_text
+        parsed = json.loads(args_text)
+        assert parsed == {"msg": "hi"}
+
+    def test_streaming_multiline_param_values(self, parser, mock_request):
+        """Multi-line parameter values in streaming mode."""
+        chunks = [
+            "<tool_call>\n",
+            "<function=Bash>\n",
+            "<parameter=command>\n",
+            "ls -la /tmp\n",
+            "</parameter>\n",
+            "<parameter=description>\n",
+            "List files\n",
+            "</parameter>\n",
+            "</function>\n",
+            "</tool_call>",
+        ]
+        results = simulate_tool_streaming(parser, mock_request, chunks)
+
+        name = collect_function_name(results)
+        assert name == "Bash"
+
+        args_text = collect_tool_arguments(results)
+        assert args_text
+        parsed = json.loads(args_text)
+        assert "ls -la /tmp" in parsed["command"]
+        assert "List files" in parsed["description"]
+
+    def test_streaming_multiline_two_tool_calls(self, parser, mock_request):
+        """Two tool calls with multi-line values — matches bug report."""
+        chunks = [
+            "<tool_call>\n",
+            "<function=Bash>\n",
+            "<parameter=command>\n",
+            "find /workspace -name '*.py' | head -20\n",
+            "</parameter>\n",
+            "<parameter=description>\n",
+            "Find Python files\n",
+            "</parameter>\n",
+            "</function>\n",
+            "</tool_call>",
+            "<tool_call>\n",
+            "<function=Read>\n",
+            "<parameter=file_path>\n",
+            "/workspace/main.py\n",
+            "</parameter>\n",
+            "</function>\n",
+            "</tool_call>",
+        ]
+        results = simulate_tool_streaming(parser, mock_request, chunks)
+
+        names = []
+        for delta, _ in results:
+            if delta and delta.tool_calls:
+                for tc in delta.tool_calls:
+                    if tc.function and tc.function.name:
+                        names.append(tc.function.name)
+
+        assert "Bash" in names
+        assert "Read" in names
+
+
+class TestArgConverter:
+    """Direct tests for the qwen3xml arg_converter with multi-line values."""
+
+    def test_multiline_param_values(self):
+        from vllm.parser.engine.parsers.qwen3 import (
+            _qwen3xml_arg_converter,
+        )
+
+        raw = (
+            "<parameter=command>\n"
+            "ls -la /tmp\n"
+            "</parameter>\n"
+            "<parameter=description>\n"
+            "List files\n"
+            "</parameter>\n"
+        )
+        result = json.loads(_qwen3xml_arg_converter(raw, partial=False))
+        assert result["command"] == "ls -la /tmp"
+        assert result["description"] == "List files"
+
+    def test_two_multiline_params(self):
+        from vllm.parser.engine.parsers.qwen3 import (
+            _qwen3xml_arg_converter,
+        )
+
+        raw = (
+            "<parameter=a>\nfoo\nbar\n</parameter>\n"
+            "<parameter=b>\nbaz\nqux\n</parameter>\n"
+        )
+        result = json.loads(_qwen3xml_arg_converter(raw, partial=False))
+        assert result["a"] == "foo\nbar"
+        assert result["b"] == "baz\nqux"
+
+    def test_partial_multiline(self):
+        from vllm.parser.engine.parsers.qwen3 import (
+            _qwen3xml_arg_converter,
+        )
+
+        raw = "<parameter=command>\nls -la</parameter>\n<parameter=desc>\npartial value"
+        result = json.loads(_qwen3xml_arg_converter(raw, partial=True))
+        assert result["command"] == "ls -la"
+        assert result["desc"] == "\npartial value"
+
+
+class TestSchemaAwareTypeCoercion:
+    """Verify that _fix_arg_types corrects mis-coerced values using the
+    tool schema."""
+
+    @pytest.fixture
+    def tools(self):
+        from vllm.entrypoints.openai.chat_completion.protocol import (
+            ChatCompletionToolsParam,
+        )
+
+        return [
+            ChatCompletionToolsParam(
+                type="function",
+                function={
+                    "name": "TaskUpdate",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "taskId": {"type": "string"},
+                            "count": {"type": "integer"},
+                            "ratio": {"type": "number"},
+                            "flag": {"type": "string"},
+                        },
+                    },
+                },
+            )
+        ]
+
+    @pytest.fixture
+    def parser_with_tools(self, mock_tokenizer, tools):
+        return ParserEngine(
+            mock_tokenizer,
+            tools=tools,
+            parser_engine_config=qwen3xml_config(),
+        )
+
+    def test_string_param_not_coerced_to_int(self, parser_with_tools, mock_request):
+        text = (
+            "<tool_call>\n"
+            "<function=TaskUpdate>\n"
+            "<parameter=taskId>1</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+        result = parser_with_tools.extract_tool_calls(text, mock_request)
+        assert result.tools_called
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args["taskId"] == "1"
+        assert isinstance(args["taskId"], str)
+
+    def test_string_param_not_coerced_to_bool(self, parser_with_tools, mock_request):
+        text = (
+            "<tool_call>\n"
+            "<function=TaskUpdate>\n"
+            "<parameter=flag>true</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+        result = parser_with_tools.extract_tool_calls(text, mock_request)
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args["flag"] == "true"
+        assert isinstance(args["flag"], str)
+
+    def test_int_param_still_coerced(self, parser_with_tools, mock_request):
+        text = (
+            "<tool_call>\n"
+            "<function=TaskUpdate>\n"
+            "<parameter=count>42</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+        result = parser_with_tools.extract_tool_calls(text, mock_request)
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args["count"] == 42
+        assert isinstance(args["count"], int)
+
+    def test_no_tools_falls_back_to_blind_coercion(self, parser, mock_request):
+        text = (
+            "<tool_call>\n"
+            "<function=TaskUpdate>\n"
+            "<parameter=taskId>1</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+        result = parser.extract_tool_calls(text, mock_request)
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args["taskId"] == 1
+        assert isinstance(args["taskId"], int)
+
+    def test_streaming_string_param_not_coerced(self, parser_with_tools, mock_request):
+        chunks = [
+            "<tool_call>\n",
+            "<function=TaskUpdate>\n",
+            "<parameter=taskId>1</parameter>\n",
+            "</function>\n",
+            "</tool_call>",
+        ]
+        results = simulate_tool_streaming(parser_with_tools, mock_request, chunks)
+        args_str = collect_tool_arguments(results)
+        args = json.loads(args_str)
+        assert args["taskId"] == "1"
+        assert isinstance(args["taskId"], str)
