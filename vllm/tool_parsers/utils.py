@@ -38,6 +38,46 @@ def safe_literal_eval(text: str):
         return ast.literal_eval(text)
 
 
+def coerce_value(text: str):
+    """Best-effort type coercion for a raw string parameter value.
+
+    Tries, in order: bool, null, int, float, JSON, Python literal eval.
+    Falls back to the stripped string when nothing matches.
+    """
+    stripped = text.strip()
+    if not stripped:
+        return ""
+
+    lower = stripped.lower()
+    if lower == "true":
+        return True
+    if lower == "false":
+        return False
+    if lower in ("null", "none", "nil"):
+        return None
+
+    try:
+        return int(stripped)
+    except ValueError:
+        pass
+    try:
+        return float(stripped)
+    except ValueError:
+        pass
+
+    try:
+        return json.loads(stripped)
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    try:
+        return safe_literal_eval(stripped)
+    except (ValueError, SyntaxError):
+        pass
+
+    return stripped
+
+
 def partial_tag_overlap(text: str, tag: str) -> int:
     """Length of the longest prefix of *tag* that matches a suffix of *text*.
 
