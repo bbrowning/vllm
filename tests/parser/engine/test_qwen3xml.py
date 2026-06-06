@@ -19,7 +19,7 @@ from tests.parser.engine.streaming_helpers import (
     simulate_tool_streaming,
 )
 from vllm.parser.engine.parser_engine import ParserEngine
-from vllm.parser.engine.parsers.qwen3 import (
+from vllm.parser.qwen3 import (
     TOOL_CALL_END,
     TOOL_CALL_START,
     qwen3xml_config,
@@ -528,7 +528,7 @@ class TestArgConverter:
     """Direct tests for the qwen3xml arg_converter with multi-line values."""
 
     def test_multiline_param_values(self):
-        from vllm.parser.engine.parsers.qwen3 import (
+        from vllm.parser.qwen3 import (
             _qwen3xml_arg_converter,
         )
 
@@ -545,7 +545,7 @@ class TestArgConverter:
         assert result["description"] == "List files"
 
     def test_two_multiline_params(self):
-        from vllm.parser.engine.parsers.qwen3 import (
+        from vllm.parser.qwen3 import (
             _qwen3xml_arg_converter,
         )
 
@@ -558,7 +558,7 @@ class TestArgConverter:
         assert result["b"] == "baz\nqux"
 
     def test_partial_multiline(self):
-        from vllm.parser.engine.parsers.qwen3 import (
+        from vllm.parser.qwen3 import (
             _qwen3xml_arg_converter,
         )
 

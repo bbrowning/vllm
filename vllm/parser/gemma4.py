@@ -29,6 +29,7 @@ import json
 from typing import TYPE_CHECKING
 
 from vllm.entrypoints.openai.engine.protocol import DeltaMessage
+from vllm.logger import init_logger
 from vllm.parser.engine.events import EventType, SemanticEvent
 from vllm.parser.engine.parser_engine import ParserEngine
 from vllm.parser.engine.parser_engine_config import (
@@ -36,9 +37,7 @@ from vllm.parser.engine.parser_engine_config import (
     ParserState,
     Transition,
 )
-from vllm.tool_parsers.gemma4_tool_parser import (
-    _parse_gemma4_args,
-)
+from vllm.tool_parsers.utils import coerce_value
 
 if TYPE_CHECKING:
     from vllm.entrypoints.openai.chat_completion.protocol import (
@@ -79,6 +78,255 @@ CHANNEL_START = "<|channel>"
 CHANNEL_END = "<channel|>"
 TOOL_CALL_START = "<|tool_call>"
 TOOL_CALL_END = "<tool_call|>"
+STRING_DELIM = '<|"|>'
+
+logger = init_logger(__name__)
+
+# ---------------------------------------------------------------------------
+# Gemma4 argument parser
+# ---------------------------------------------------------------------------
+
+_PARTIAL_DELIM_SUFFIXES = tuple(
+    STRING_DELIM[:k] for k in range(len(STRING_DELIM), 0, -1)
+)
+
+
+def _strip_partial_delim(value: str) -> str:
+    """Strip a trailing partial ``STRING_DELIM`` prefix from *value*.
+
+    During streaming, an unterminated string value may end with a
+    partial ``<|"|>`` delimiter (e.g. ``<|"``).  The ``"`` inside
+    would be JSON-escaped as ``\\"``, and the ``\\`` bypasses the
+    safe_json stripping in ``_compute_arg_delta``, corrupting the
+    streamed argument diff.  Stripping it here prevents the leak;
+    the full value arrives on the next delta or final flush.
+    """
+    for suffix in _PARTIAL_DELIM_SUFFIXES:
+        if value.endswith(suffix):
+            return value[: -len(suffix)]
+    return value
+
+
+def _parse_gemma4_args(args_str: str, *, partial: bool = False) -> dict:
+    """Parse Gemma4's custom key:value format into a Python dict.
+
+    Format examples::
+
+        location:<|"|>Tokyo<|"|>
+        location:<|"|>San Francisco<|"|>,unit:<|"|>celsius<|"|>
+        count:42,flag:true
+        nested:{inner_key:<|"|>val<|"|>}
+        items:[<|"|>a<|"|>,<|"|>b<|"|>]
+
+    Args:
+        args_str: The raw Gemma4 argument string.
+        partial: When True (streaming), bare values at end of string are
+            omitted because they may be incomplete and type-unstable
+            (e.g. partial boolean parsed as bare string).
+
+    Returns a dict ready for ``json.dumps()``.
+    """
+    if not args_str or not args_str.strip():
+        return {}
+
+    result: dict = {}
+    i = 0
+    n = len(args_str)
+
+    while i < n:
+        while i < n and args_str[i] in (" ", ",", "\n", "\t"):
+            i += 1
+        if i >= n:
+            break
+
+        key_start = i
+        while i < n and args_str[i] != ":":
+            i += 1
+        if i >= n:
+            break
+        key = args_str[key_start:i].strip()
+        i += 1
+
+        if i >= n:
+            if not partial:
+                result[key] = ""
+            break
+
+        while i < n and args_str[i] in (" ", "\n", "\t"):
+            i += 1
+        if i >= n:
+            if not partial:
+                result[key] = ""
+            break
+
+        if args_str[i:].startswith(STRING_DELIM):
+            i += len(STRING_DELIM)
+            val_start = i
+            end_pos = args_str.find(STRING_DELIM, i)
+            if end_pos == -1:
+                # Unterminated string — take rest, but strip any
+                # trailing partial STRING_DELIM prefix so it doesn't
+                # leak into the JSON (the " in <|" gets escaped as
+                # \" which bypasses safe_json stripping).
+                value = args_str[val_start:]
+                if partial:
+                    value = _strip_partial_delim(value)
+                result[key] = value
+                break
+            result[key] = args_str[val_start:end_pos]
+            i = end_pos + len(STRING_DELIM)
+
+        elif args_str[i] == "{":
+            depth = 1
+            obj_start = i + 1
+            i += 1
+            while i < n and depth > 0:
+                if args_str[i:].startswith(STRING_DELIM):
+                    # Skip over string contents to avoid counting { inside strings
+                    i += len(STRING_DELIM)
+                    next_delim = args_str.find(STRING_DELIM, i)
+                    i = n if next_delim == -1 else next_delim + len(STRING_DELIM)
+                    continue
+                if args_str[i] == "{":
+                    depth += 1
+                elif args_str[i] == "}":
+                    depth -= 1
+                i += 1
+            if depth > 0:
+                # Incomplete nested object — use i (not i-1) to avoid
+                # dropping the last char, and recurse as partial.
+                result[key] = _parse_gemma4_args(args_str[obj_start:i], partial=True)
+            else:
+                result[key] = _parse_gemma4_args(args_str[obj_start : i - 1])
+
+        elif args_str[i] == "[":
+            depth = 1
+            arr_start = i + 1
+            i += 1
+            while i < n and depth > 0:
+                if args_str[i:].startswith(STRING_DELIM):
+                    i += len(STRING_DELIM)
+                    next_delim = args_str.find(STRING_DELIM, i)
+                    i = n if next_delim == -1 else next_delim + len(STRING_DELIM)
+                    continue
+                if args_str[i] == "[":
+                    depth += 1
+                elif args_str[i] == "]":
+                    depth -= 1
+                i += 1
+            if depth > 0:
+                result[key] = _parse_gemma4_array(args_str[arr_start:i], partial=True)
+            else:
+                result[key] = _parse_gemma4_array(args_str[arr_start : i - 1])
+
+        else:
+            val_start = i
+            while i < n and args_str[i] not in (",", "}", "]"):
+                i += 1
+            if partial and i >= n:
+                # Value may be incomplete (e.g. partial boolean) —
+                # withhold to avoid type instability during streaming.
+                break
+            if i == val_start:
+                logger.warning(
+                    "Gemma4 args parser made no progress at position %d; "
+                    "aborting on malformed input.",
+                    i,
+                )
+                break
+            if partial:
+                raw_val = args_str[val_start:i].strip()
+                if raw_val.endswith("."):
+                    # Trailing dot means decimal digits may still arrive
+                    # (e.g. "108." may become "108.2"). Parsing now would
+                    # yield float("108.") == 108.0, whose json repr "108.0"
+                    # corrupts the streaming diff when the true digit lands.
+                    break
+            result[key] = coerce_value(args_str[val_start:i])
+
+    return result
+
+
+def _parse_gemma4_array(arr_str: str, *, partial: bool = False) -> list:
+    items: list = []
+    i = 0
+    n = len(arr_str)
+
+    while i < n:
+        while i < n and arr_str[i] in (" ", ",", "\n", "\t"):
+            i += 1
+        if i >= n:
+            break
+
+        if arr_str[i:].startswith(STRING_DELIM):
+            i += len(STRING_DELIM)
+            end_pos = arr_str.find(STRING_DELIM, i)
+            if end_pos == -1:
+                items.append(arr_str[i:])
+                break
+            items.append(arr_str[i:end_pos])
+            i = end_pos + len(STRING_DELIM)
+
+        elif arr_str[i] == "{":
+            depth = 1
+            obj_start = i + 1
+            i += 1
+            while i < n and depth > 0:
+                if arr_str[i:].startswith(STRING_DELIM):
+                    i += len(STRING_DELIM)
+                    nd = arr_str.find(STRING_DELIM, i)
+                    i = nd + len(STRING_DELIM) if nd != -1 else n
+                    continue
+                if arr_str[i] == "{":
+                    depth += 1
+                elif arr_str[i] == "}":
+                    depth -= 1
+                i += 1
+            if depth > 0:
+                items.append(_parse_gemma4_args(arr_str[obj_start:i], partial=True))
+            else:
+                items.append(_parse_gemma4_args(arr_str[obj_start : i - 1]))
+
+        elif arr_str[i] == "[":
+            depth = 1
+            sub_start = i + 1
+            i += 1
+            while i < n and depth > 0:
+                if arr_str[i:].startswith(STRING_DELIM):
+                    i += len(STRING_DELIM)
+                    nd = arr_str.find(STRING_DELIM, i)
+                    i = nd + len(STRING_DELIM) if nd != -1 else n
+                    continue
+                if arr_str[i] == "[":
+                    depth += 1
+                elif arr_str[i] == "]":
+                    depth -= 1
+                i += 1
+            if depth > 0:
+                items.append(_parse_gemma4_array(arr_str[sub_start:i], partial=True))
+            else:
+                items.append(_parse_gemma4_array(arr_str[sub_start : i - 1]))
+
+        else:
+            val_start = i
+            while i < n and arr_str[i] not in (",", "]"):
+                i += 1
+            if partial and i >= n:
+                break
+            if i == val_start:
+                logger.warning(
+                    "Gemma4 array parser made no progress at position %d; "
+                    "aborting on malformed input.",
+                    i,
+                )
+                break
+            if partial:
+                raw_val = arr_str[val_start:i].strip()
+                if raw_val.endswith("."):
+                    break
+            items.append(coerce_value(arr_str[val_start:i]))
+
+    return items
 
 
 def _gemma4_arg_converter(raw_args: str, partial: bool) -> str:

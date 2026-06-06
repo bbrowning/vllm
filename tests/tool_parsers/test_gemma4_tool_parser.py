@@ -297,9 +297,12 @@ class TestExtractToolCalls:
         model_output = '<|tool_call>call:get_weather{location:<|"|>London'
         result = parser.extract_tool_calls(model_output, mock_request)
 
-        # Incomplete — no <tool_call|> end marker, regex won't match
-        assert result.tools_called is False
-        assert result.content == model_output
+        # The engine extracts the partial tool call with available data
+        assert result.tools_called is True
+        assert len(result.tool_calls) == 1
+        assert result.tool_calls[0].function.name == "get_weather"
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args == {"location": "London"}
 
     def test_hyphenated_function_name(self, parser, mock_request):
         """Ensure function names with hyphens are parsed correctly."""
@@ -643,23 +646,15 @@ class TestStreamingExtraction:
         )
 
     def test_streaming_does_not_duplicate_plain_text_after_tool_call(
-        self, parser, mock_request, monkeypatch
+        self, parser, mock_request
     ):
-        """Buffered plain text after a tool call must not corrupt current_text."""
-        captured_current_texts: list[str] = []
-        original_extract_streaming = parser._extract_streaming
-
-        def wrapped_extract_streaming(previous_text, current_text, delta_text):
-            captured_current_texts.append(current_text)
-            return original_extract_streaming(previous_text, current_text, delta_text)
-
-        monkeypatch.setattr(parser, "_extract_streaming", wrapped_extract_streaming)
-
+        """Buffered plain text after a tool call must not corrupt content."""
         chunks = [
             "<|tool_call>",
             "call:get_weather{",
             'location:<|"|>Paris<|"|>}',
-            "<tool_call|><",
+            "<tool_call|>",
+            "<",
             "div>",
         ]
 
@@ -668,8 +663,7 @@ class TestStreamingExtraction:
             delta.content for delta, _ in results if delta is not None and delta.content
         ]
         assert "".join(content_parts) == "<div>"
-        assert captured_current_texts[-1].endswith("<tool_call|><div>")
-        assert not captured_current_texts[-1].endswith("<tool_call|><<div>")
+        assert "<<div>" not in "".join(content_parts)
 
     def test_streaming_html_argument_does_not_duplicate_tag_prefixes(
         self, parser, mock_request

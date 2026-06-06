@@ -29,8 +29,8 @@ _REASONING_PARSERS_TO_REGISTER = {
         "DeepSeekV3ReasoningParser",
     ),
     "deepseek_v4": (
-        "deepseek_v3_reasoning_parser",
-        "DeepSeekV3ReasoningParser",
+        "deepseek_v4_reasoning_parser",
+        "DeepSeekV4ParserReasoningAdapter",
     ),
     "poolside_v1": (
         "poolside_v1_reasoning_parser",
@@ -50,7 +50,7 @@ _REASONING_PARSERS_TO_REGISTER = {
     ),
     "gemma4": (
         "gemma4_reasoning_parser",
-        "Gemma4ReasoningParser",
+        "Gemma4ParserReasoningAdapter",
     ),
     "glm45": (
         "deepseek_v3_reasoning_parser",
@@ -82,7 +82,7 @@ _REASONING_PARSERS_TO_REGISTER = {
     ),
     "mimo": (
         "qwen3_reasoning_parser",
-        "Qwen3ReasoningParser",
+        "Qwen3ParserReasoningAdapter",
     ),
     "minimax_m2": (
         "minimax_m2_reasoning_parser",
@@ -98,7 +98,7 @@ _REASONING_PARSERS_TO_REGISTER = {
     ),
     "nemotron_v3": (
         "nemotron_v3_reasoning_parser",
-        "NemotronV3ReasoningParser",
+        "NemotronV3ParserReasoningAdapter",
     ),
     "olmo3": (
         "olmo3_reasoning_parser",
@@ -106,7 +106,7 @@ _REASONING_PARSERS_TO_REGISTER = {
     ),
     "qwen3": (
         "qwen3_reasoning_parser",
-        "Qwen3ReasoningParser",
+        "Qwen3ParserReasoningAdapter",
     ),
     "seed_oss": (
         "seedoss_reasoning_parser",

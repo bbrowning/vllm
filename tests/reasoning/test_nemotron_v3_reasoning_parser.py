@@ -12,7 +12,7 @@ from vllm.parser.abstract_parser import DelegatingParser
 from vllm.reasoning import ReasoningParser, ReasoningParserManager
 from vllm.reasoning.nemotron_v3_reasoning_parser import NemotronV3ReasoningParser
 
-parser_name = "nemotron_v3"
+PARSER_NAMES = ["nemotron_v3", "nemotron_v3_engine"]
 
 
 class ReasoningCase(TypedDict):
@@ -41,6 +41,10 @@ class FakeNemotronTokenizer:
 
     def convert_tokens_to_string(self, tokens: list[str]) -> str:
         return "".join(tokens)
+
+    def decode(self, token_ids: list[int]) -> str:
+        inv = {v: k for k, v in self._vocab.items()}
+        return "".join(inv.get(tid, f"<unk:{tid}>") for tid in token_ids)
 
 
 @pytest.fixture
@@ -89,10 +93,12 @@ def tokenizer():
         ),
     ],
 )
+@pytest.mark.parametrize("parser_name", PARSER_NAMES)
 def test_nemotron_v3_reasoning(
     tokenizer: FakeNemotronTokenizer,
     streaming: bool,
     param_dict: ReasoningCase,
+    parser_name: str,
 ):
     output = tokenizer.tokenize(param_dict["output"])
     model_output = [tokenizer.convert_tokens_to_string([token]) for token in output]
@@ -108,8 +114,10 @@ def test_nemotron_v3_reasoning(
     assert content == param_dict["content"]
 
 
+@pytest.mark.parametrize("parser_name", PARSER_NAMES)
 def test_nemotron_v3_without_thinking_moves_into_content(
     tokenizer: FakeNemotronTokenizer,
+    parser_name: str,
 ):
     parser_cls = ReasoningParserManager.get_reasoning_parser(parser_name)
     parser = parser_cls(tokenizer)
@@ -132,8 +140,10 @@ def test_nemotron_v3_without_thinking_moves_into_content(
     assert content == "This is plain content"
 
 
+@pytest.mark.parametrize("parser_name", PARSER_NAMES)
 def test_nemotron_v3_force_nonempty_content_moves_into_content(
     tokenizer: FakeNemotronTokenizer,
+    parser_name: str,
 ):
     parser_cls = ReasoningParserManager.get_reasoning_parser(parser_name)
     parser = parser_cls(tokenizer)
@@ -154,8 +164,10 @@ def test_nemotron_v3_force_nonempty_content_moves_into_content(
     assert content == "This is plain content"
 
 
+@pytest.mark.parametrize("parser_name", PARSER_NAMES)
 def test_nemotron_v3_force_nonempty_keeps_real_content(
     tokenizer: FakeNemotronTokenizer,
+    parser_name: str,
 ):
     # When real content follows the closing tag nothing is promoted: the
     # content after </think> is returned as-is and reasoning stays separate.
@@ -178,8 +190,10 @@ def test_nemotron_v3_force_nonempty_keeps_real_content(
     assert content == "real answer"
 
 
+@pytest.mark.parametrize("parser_name", PARSER_NAMES)
 def test_nemotron_v3_with_thinking_keeps_truncated_reasoning(
     tokenizer: FakeNemotronTokenizer,
+    parser_name: str,
 ):
     parser_cls = ReasoningParserManager.get_reasoning_parser(parser_name)
     parser = parser_cls(tokenizer)

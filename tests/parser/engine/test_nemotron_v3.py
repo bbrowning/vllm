@@ -22,7 +22,7 @@ from tests.parser.engine.streaming_helpers import (
 from vllm.entrypoints.openai.chat_completion.protocol import (
     ChatCompletionRequest,
 )
-from vllm.parser.engine.parsers.nemotron_v3 import NemotronV3Parser
+from vllm.parser.nemotron_v3 import NemotronV3Parser
 
 _THINK_START_ID = 50
 _THINK_END_ID = 51

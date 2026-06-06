@@ -733,18 +733,23 @@ class DelegatingParser(Parser):
         supports_required_and_named = self._tool_parser.supports_required_and_named
 
         if request.tool_choice == "none":
-            delta_message = self.extract_tool_calls_streaming(
-                previous_text,
-                current_text,
-                delta_text,
-                previous_token_ids,
-                current_token_ids,
-                delta_token_ids,
-                request,  # type: ignore[arg-type]
+            if getattr(self._tool_parser, "delta_only_streaming", False):
+                delta_message = self.extract_tool_calls_streaming(
+                    previous_text,
+                    current_text,
+                    delta_text,
+                    previous_token_ids,
+                    current_token_ids,
+                    delta_token_ids,
+                    request,  # type: ignore[arg-type]
+                )
+                if delta_message:
+                    delta_message.tool_calls = []
+                return delta_message, False
+            return (
+                DeltaMessage(content=delta_text) if delta_text else None,
+                False,
             )
-            if delta_message:
-                delta_message.tool_calls = []
-            return delta_message, False
 
         if (
             supports_required_and_named

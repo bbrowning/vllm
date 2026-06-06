@@ -7,11 +7,11 @@ names so that :class:`ReasoningParserManager` and
 :class:`ToolParserManager` can load them lazily.
 """
 
+from vllm.parser.deepseek_v4 import DeepSeekV4Parser
 from vllm.parser.engine.adapters import make_adapters
-from vllm.parser.engine.parsers.deepseek_v4 import DeepSeekV4Parser
-from vllm.parser.engine.parsers.gemma4 import Gemma4Parser
-from vllm.parser.engine.parsers.nemotron_v3 import NemotronV3Parser
-from vllm.parser.engine.parsers.qwen3 import (
+from vllm.parser.gemma4 import Gemma4Parser
+from vllm.parser.nemotron_v3 import NemotronV3Parser
+from vllm.parser.qwen3 import (
     Qwen3Parser,
     Qwen3XMLParser,
 )

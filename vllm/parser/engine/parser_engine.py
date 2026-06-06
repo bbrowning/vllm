@@ -330,6 +330,10 @@ class ParserEngine(Parser):
         output, this method starts the parser engine in ``CONTENT`` state
         so it can parse content that has already had reasoning stripped.
         """
+        tool_choice = getattr(request, "tool_choice", None)
+        tools = getattr(request, "tools", None)
+        if tool_choice == "none" and tools:
+            self._engine.skip_tool_parsing = True
         _, parsed_content, tool_call_info = self._single_pass_parse(
             content,
             [],
@@ -355,6 +359,11 @@ class ParserEngine(Parser):
     ) -> DeltaMessage | None:
         if not previous_text:
             self._reset()
+        if not self._engine.skip_tool_parsing:
+            tool_choice = getattr(request, "tool_choice", None)
+            tools = getattr(request, "tools", None)
+            if tool_choice == "none" and tools:
+                self._engine.skip_tool_parsing = True
         events = self._engine.feed(delta_text, delta_token_ids)
         return self._strip_trailing_reasoning(self._events_to_delta(events))
 
@@ -445,6 +454,10 @@ class ParserEngine(Parser):
         request: ChatCompletionRequest | ResponsesRequest,
         enable_auto_tools: bool = False,
     ) -> tuple[str | None, str | None, list[FunctionCall] | None]:
+        tool_choice = getattr(request, "tool_choice", None)
+        tools = getattr(request, "tools", None)
+        if tool_choice == "none" and tools:
+            self._engine.skip_tool_parsing = True
         reasoning, content, tool_call_info = self._single_pass_parse(
             model_output,
             [],

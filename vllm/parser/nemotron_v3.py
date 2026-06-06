@@ -16,7 +16,7 @@ import dataclasses
 import functools
 from typing import TYPE_CHECKING
 
-from vllm.parser.engine.parsers.qwen3 import Qwen3Parser, qwen3_config
+from vllm.parser.qwen3 import Qwen3Parser, qwen3_config
 
 if TYPE_CHECKING:
     from vllm.entrypoints.openai.chat_completion.protocol import (

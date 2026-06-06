@@ -14,8 +14,7 @@ from tests.parser.engine.streaming_helpers import (
     simulate_reasoning_streaming,
     simulate_tool_streaming,
 )
-from vllm.parser.engine.parser_engine import ParserEngine
-from vllm.parser.engine.parsers.deepseek_v4 import (
+from vllm.parser.deepseek_v4 import (
     DSML_INVOKE_END,
     DSML_INVOKE_NAME_END,
     DSML_INVOKE_PREFIX,
@@ -27,6 +26,7 @@ from vllm.parser.engine.parsers.deepseek_v4 import (
     _dsml_arg_converter,
     deepseek_v4_config,
 )
+from vllm.parser.engine.parser_engine import ParserEngine
 
 _THINK_START_ID = 50
 _THINK_END_ID = 51

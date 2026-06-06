@@ -22,8 +22,8 @@ def generic_tokenizer():
 
 INVALID_SIMPLE_NONSTREAMING = {
     "output": "This is a reasoning section<channel|>This is the rest",
-    "reasoning": "This is a reasoning section",
-    "content": "This is the rest",
+    "reasoning": None,
+    "content": "This is a reasoning sectionThis is the rest",
     "is_reasoning_end": True,
 }
 INVALID_SIMPLE_STREAMING = {
@@ -34,8 +34,8 @@ INVALID_SIMPLE_STREAMING = {
 }
 INVALID_COMPLETE_NONSTREAMING = {
     "output": "This is a reasoning section<channel|>",
-    "reasoning": "This is a reasoning section",
-    "content": None,
+    "reasoning": None,
+    "content": "This is a reasoning section",
     "is_reasoning_end": True,
 }
 INVALID_COMPLETE_STREAMING = {
@@ -83,15 +83,15 @@ CHANNEL_NO_END = {
 EMPTY = {
     "output": "",
     "reasoning": None,
-    "content": "",
-    "is_reasoning_end": False,
+    "content": None,
+    "is_reasoning_end": True,
 }
 NEW_LINE_NONSTREAMING = {
     "output": (
         "Before\n<|channel>This is a reasoning section<channel|>\nThis is the rest"
     ),
     "reasoning": "This is a reasoning section",
-    "content": "\nThis is the rest",
+    "content": "Before\n\nThis is the rest",
     "is_reasoning_end": True,
 }
 NEW_LINE_STREAMING = {
@@ -111,7 +111,7 @@ THOUGHT_PREFIX = {
 }
 THOUGHT_PREFIX_ONLY = {
     "output": "<|channel>thought\n<channel|>",
-    "reasoning": "",
+    "reasoning": None,
     "content": None,
     "is_reasoning_end": True,
 }

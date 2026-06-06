@@ -15,7 +15,7 @@ import pytest
 
 from tests.parser.engine.conftest import make_mock_tokenizer
 from tests.parser.engine.streaming_helpers import simulate_reasoning_streaming
-from vllm.parser.engine.parsers.qwen3 import Qwen3Parser, qwen3_config
+from vllm.parser.qwen3 import Qwen3Parser, qwen3_config
 
 _THINK_START_ID = 50
 _THINK_END_ID = 51
