@@ -31,6 +31,8 @@ class ReasoningParser:
     It is used to extract reasoning content from the model output.
     """
 
+    engine_based_streaming: bool = False
+
     def __init__(self, tokenizer: "TokenizerLike", *args, **kwargs):
         self.model_tokenizer = tokenizer
         # Optional vLLM ModelConfig from the server. Use get (not pop) so composite

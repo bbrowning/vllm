@@ -40,7 +40,7 @@ class ParserEngineReasoningAdapter(ReasoningParser):
     """
 
     _parser_engine_cls: type[ParserEngine]
-    delta_only_streaming: bool = True
+    engine_based_streaming: bool = True
 
     def __init__(self, tokenizer: TokenizerLike, *args, **kwargs) -> None:
         super().__init__(tokenizer, *args, **kwargs)
@@ -117,7 +117,7 @@ class ParserEngineToolAdapter(ToolParser):
     """
 
     _parser_engine_cls: type[ParserEngine]
-    delta_only_streaming: bool = True
+    engine_based_streaming: bool = True
 
     def __init__(
         self,

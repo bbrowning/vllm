@@ -85,7 +85,7 @@ class IncrementalLexer:
 
     def __init__(
         self,
-        terminals: list[TerminalDef],
+        terminals: list[TerminalDef] | LexerShape,
         content_terminal: str = CONTENT_TERMINAL,
     ) -> None:
         if isinstance(terminals, LexerShape):

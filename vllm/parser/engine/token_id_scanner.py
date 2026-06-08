@@ -190,6 +190,8 @@ class TokenIDScanner:
             remaining = self._deferred_post_text + remaining
             self._deferred_post_text = ""
 
+        # Duplicate-text deferred terminals resolve left-to-right via
+        # find(); correct when each terminal text appears once in sequence.
         for terminal in deferred:
             pos = remaining.find(terminal.text)
             if pos > 0:
@@ -275,6 +277,12 @@ class TokenIDScanner:
         text.  This prevents earlier literal lookalikes (e.g. a user
         mentioning ``<tool_call>`` in prose) from stealing the position
         of a real special-token anchor that appears later.
+
+        If the same anchor text appears multiple times as real special
+        tokens (not prose), the rightmost-first binding could misalign.
+        In practice this doesn't happen: each special token ID maps to
+        a distinct PreLexedTerminal, and duplicates in prose are resolved
+        by the token-ID filtering layer above.
         """
         anchors = [item for item in results if isinstance(item, PreLexedTerminal)]
         if not anchors:

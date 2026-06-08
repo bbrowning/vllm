@@ -7,7 +7,6 @@ extraction with a single :class:`StreamingParserEngine`.
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cached_property
@@ -40,8 +39,6 @@ if TYPE_CHECKING:
     from vllm.tool_parsers.abstract_tool_parser import Tool
 
 logger = init_logger(__name__)
-
-_DUMP_PATH = os.environ.get("VLLM_DUMP_PARSER_TOKENS")
 
 
 @dataclass
@@ -79,6 +76,7 @@ class ParserEngine(Parser):
         )
 
         self._reasoning_ended: bool = False
+        self._streaming_initialized: bool = False
 
         self._tool_slots: list[ToolCallSlot] = []
         self._deferred_content: str = ""
@@ -97,19 +95,6 @@ class ParserEngine(Parser):
         self._strip_content_ws_with_tools = (
             parser_engine_config.strip_content_whitespace_with_tools
         )
-
-        if _DUMP_PATH:
-            from vllm.parser.engine.token_capture import TokenCapture
-
-            self._capture: TokenCapture | None = TokenCapture(
-                parser_engine_config.name,
-                _DUMP_PATH,
-                parser_engine_config,
-                self.vocab,
-                tokenizer,
-            )
-        else:
-            self._capture = None
 
         vocab = self.vocab
         self._reasoning_start_token_id: int | None = None
@@ -137,8 +122,6 @@ class ParserEngine(Parser):
     # ── Engine lifecycle ──────────────────────────────────────────────
 
     def _reset(self, initial_state: ParserState | None = None) -> None:
-        if self._capture is not None:
-            self._capture.flush()
         self._engine.reset(initial_state=initial_state)
         self._reasoning_ended = False
         self._tool_slots.clear()
@@ -210,20 +193,11 @@ class ParserEngine(Parser):
             tools = getattr(request, "tools", None)
             if tool_choice == "none" and tools:
                 self._engine.skip_tool_parsing = True
-        capture = self._capture
-        if capture is not None:
-            for tid in delta_token_ids:
-                capture.tokens.append([tid, ""])
         events = self._engine.feed(delta_text, delta_token_ids)
         if finished:
             events.extend(self._engine.finish())
         result = self._events_to_delta(events, finished=finished)
-        result = self._strip_trailing_reasoning(result)
-        if capture is not None and result is not None:
-            capture.deltas.append(result)
-        if finished and capture is not None:
-            capture.flush()
-        return result
+        return self._strip_trailing_reasoning(result)
 
     def _strip_trailing_reasoning(
         self,
@@ -295,7 +269,8 @@ class ParserEngine(Parser):
         current_token_ids: Sequence[int],
         delta_token_ids: Sequence[int],
     ) -> DeltaMessage | None:
-        if not previous_text:
+        if not self._streaming_initialized:
+            self._streaming_initialized = True
             self._reset()
         events = self._engine.feed(delta_text, delta_token_ids)
         return self._strip_trailing_reasoning(self._events_to_delta(events))
@@ -308,6 +283,7 @@ class ParserEngine(Parser):
         request: ChatCompletionRequest,
     ) -> ExtractedToolCallInformation:
         self._reset()
+        self._streaming_initialized = True
         result = self.extract_tool_calls_streaming(
             previous_text="",
             current_text=model_output,
@@ -332,10 +308,6 @@ class ParserEngine(Parser):
         output, this method starts the parser engine in ``CONTENT`` state
         so it can parse content that has already had reasoning stripped.
         """
-        tool_choice = getattr(request, "tool_choice", None)
-        tools = getattr(request, "tools", None)
-        if tool_choice == "none" and tools:
-            self._engine.skip_tool_parsing = True
         _, parsed_content, tool_call_info = self._single_pass_parse(
             content,
             [],
@@ -359,7 +331,8 @@ class ParserEngine(Parser):
         delta_token_ids: Sequence[int],
         request: ChatCompletionRequest,
     ) -> DeltaMessage | None:
-        if not previous_text:
+        if not self._streaming_initialized:
+            self._streaming_initialized = True
             self._reset()
         if not self._engine.skip_tool_parsing:
             tool_choice = getattr(request, "tool_choice", None)
@@ -456,10 +429,6 @@ class ParserEngine(Parser):
         request: ChatCompletionRequest | ResponsesRequest,
         enable_auto_tools: bool = False,
     ) -> tuple[str | None, str | None, list[FunctionCall] | None]:
-        tool_choice = getattr(request, "tool_choice", None)
-        tools = getattr(request, "tools", None)
-        if tool_choice == "none" and tools:
-            self._engine.skip_tool_parsing = True
         reasoning, content, tool_call_info = self._single_pass_parse(
             model_output,
             [],

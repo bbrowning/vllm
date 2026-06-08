@@ -20,6 +20,7 @@ from vllm.parser.engine.parser_engine_config import (
     Transition,
 )
 from vllm.parser.engine.token_id_scanner import (
+    LexerInput,
     PreLexedTerminal,
     TextChunk,
     TokenIDScanner,
@@ -147,47 +148,25 @@ class StreamingParserEngine:
             lex_tokens = self._lexer.feed(scanner_items[0].text)
             if len(lex_tokens) == 1 and lex_tokens[0].terminal == CONTENT_TERMINAL:
                 text = lex_tokens[0].value
-                if self.state == ParserState.TOOL_ARGS:
-                    if self.config.tool_args_json:
-                        return self._feed_args_text(text)
-                    return [
-                        SemanticEvent(
-                            EventType.ARG_VALUE_CHUNK,
-                            value=text,
-                            tool_index=self.tool_index,
-                        )
-                    ]
-                content_type = self.config.content_events.get(self.state)
-                if content_type is not None:
-                    return [
-                        SemanticEvent(
-                            content_type,
-                            value=text,
-                            tool_index=self.tool_index,
-                        )
-                    ]
-                return []
+                return self._emit_for_state(text)
             return self._process_lex_tokens(lex_tokens)
 
+        return self._process_scanner_items(scanner_items)
+
+    def _process_scanner_items(
+        self, items: Sequence[LexerInput]
+    ) -> list[SemanticEvent]:
         events: list[SemanticEvent] = []
-        for item in scanner_items:
+        for item in items:
             if isinstance(item, PreLexedTerminal):
                 events.extend(self._process_lex_tokens(self._lexer.flush()))
                 events.extend(self._on_terminal(item.terminal, item.text))
             elif isinstance(item, TextChunk):
                 events.extend(self._process_lex_tokens(self._lexer.feed(item.text)))
-
         return events
 
     def finish(self) -> list[SemanticEvent]:
-        events: list[SemanticEvent] = []
-
-        for item in self._scanner.flush_pending():
-            if isinstance(item, PreLexedTerminal):
-                events.extend(self._process_lex_tokens(self._lexer.flush()))
-                events.extend(self._on_terminal(item.terminal, item.text))
-            elif isinstance(item, TextChunk):
-                events.extend(self._process_lex_tokens(self._lexer.feed(item.text)))
+        events = self._process_scanner_items(self._scanner.flush_pending())
 
         events.extend(self._process_lex_tokens(self._lexer.flush()))
 
@@ -254,22 +233,7 @@ class StreamingParserEngine:
         transition = self.config.transitions.get(key)
 
         if transition is None:
-            if self.state == ParserState.TOOL_ARGS:
-                if self.config.tool_args_json:
-                    return self._feed_args_char(value)
-                return [
-                    SemanticEvent(
-                        EventType.ARG_VALUE_CHUNK,
-                        value=value,
-                        tool_index=self.tool_index,
-                    )
-                ]
-            content_type = self.config.content_events.get(self.state)
-            if content_type is not None:
-                return [
-                    SemanticEvent(content_type, value=value, tool_index=self.tool_index)
-                ]
-            return []
+            return self._emit_for_state(value)
 
         if self.skip_tool_parsing and terminal in self._tool_terminals:
             if EventType.REASONING_END in transition.events:
@@ -295,24 +259,26 @@ class StreamingParserEngine:
 
         return self._apply_transition(transition, value)
 
-    def _on_content(self, text: str) -> list[SemanticEvent]:
-        if not text:
-            return []
-
+    def _emit_for_state(self, text: str) -> list[SemanticEvent]:
         if self.state == ParserState.TOOL_ARGS:
             if self.config.tool_args_json:
                 return self._feed_args_text(text)
             return [
                 SemanticEvent(
-                    EventType.ARG_VALUE_CHUNK, value=text, tool_index=self.tool_index
+                    EventType.ARG_VALUE_CHUNK,
+                    value=text,
+                    tool_index=self.tool_index,
                 )
             ]
-
         content_type = self.config.content_events.get(self.state)
-        if content_type is None:
-            return []
+        if content_type is not None:
+            return [SemanticEvent(content_type, value=text, tool_index=self.tool_index)]
+        return []
 
-        return [SemanticEvent(content_type, value=text, tool_index=self.tool_index)]
+    def _on_content(self, text: str) -> list[SemanticEvent]:
+        if not text:
+            return []
+        return self._emit_for_state(text)
 
     def _apply_transition(
         self,

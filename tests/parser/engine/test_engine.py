@@ -407,3 +407,89 @@ class TestTokenIdFiltering:
 
         assert sum(1 for e in all_events if e.type == EventType.TOOL_CALL_START) == 1
         assert sum(1 for e in all_events if e.type == EventType.TOOL_CALL_END) == 1
+
+
+class TestMultiCharTerminalInArgs:
+    """Regression: multi-char terminals falling through in TOOL_ARGS
+    must be fed char-by-char via _feed_args_text, not _feed_args_char."""
+
+    @staticmethod
+    def _newline_config() -> ParserEngineConfig:
+        return ParserEngineConfig(
+            name="newline_test",
+            terminals={
+                "TOOL_START": "<tool_call>",
+                "TOOL_END": "</tool_call>",
+                "NEWLINE": "\n",
+            },
+            transitions={
+                (ParserState.CONTENT, "TOOL_START"): Transition(
+                    ParserState.TOOL_ARGS,
+                    [EventType.TOOL_CALL_START],
+                ),
+                (ParserState.TOOL_ARGS, "TOOL_END"): Transition(
+                    ParserState.CONTENT,
+                    [EventType.TOOL_CALL_END],
+                ),
+            },
+            content_events={
+                ParserState.CONTENT: EventType.TEXT_CHUNK,
+                ParserState.TOOL_ARGS: EventType.ARG_VALUE_CHUNK,
+            },
+        )
+
+    def test_newline_in_args_parsed_correctly(self):
+        engine = StreamingParserEngine(self._newline_config(), tokenizer=None)
+        text = '<tool_call>{"name": "f",\n"arguments": {"a": 1}}</tool_call>'
+        events = engine.parse_complete(text)
+
+        arg_text = "".join(
+            e.value for e in events if e.type == EventType.ARG_VALUE_CHUNK
+        )
+        assert '"name": "f"' in arg_text
+        assert '"arguments"' in arg_text
+
+    def test_newline_in_args_streaming(self):
+        engine = StreamingParserEngine(self._newline_config(), tokenizer=None)
+        all_events = TestStreaming._feed_chars(
+            engine, '<tool_call>{"name": "f",\n"a": 1}</tool_call>'
+        )
+
+        arg_text = "".join(
+            e.value for e in all_events if e.type == EventType.ARG_VALUE_CHUNK
+        )
+        assert '"name": "f"' in arg_text
+        assert '"a": 1' in arg_text
+
+
+class TestSkipToolParsing:
+    """When skip_tool_parsing is set, tool tags become content."""
+
+    def test_tool_tags_emitted_as_content(self):
+        engine = StreamingParserEngine(_hermes_config(), tokenizer=None)
+        engine.skip_tool_parsing = True
+
+        text = '<tool_call>{"name": "f"}</tool_call>'
+        events = engine.parse_complete(text)
+
+        types = [e.type for e in events]
+        assert EventType.TOOL_CALL_START not in types
+        assert EventType.TOOL_CALL_END not in types
+
+        content = "".join(e.value for e in events if e.type == EventType.TEXT_CHUNK)
+        assert "<tool_call>" in content
+        assert "</tool_call>" in content
+
+    def test_skip_tool_streaming(self):
+        engine = StreamingParserEngine(_hermes_config(), tokenizer=None)
+        engine.skip_tool_parsing = True
+
+        all_events = TestStreaming._feed_chars(
+            engine, '<tool_call>{"name": "f"}</tool_call>'
+        )
+
+        types = [e.type for e in all_events]
+        assert EventType.TOOL_CALL_START not in types
+
+        content = "".join(e.value for e in all_events if e.type == EventType.TEXT_CHUNK)
+        assert "<tool_call>" in content
