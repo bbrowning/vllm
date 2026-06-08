@@ -9,51 +9,75 @@ from tests.tool_parsers.common_tests import (
     ToolParserTests,
 )
 
+_QWEN3XML_CONFIG = dict(
+    # Test data
+    no_tool_calls_output="This is a regular response without any tool calls.",
+    single_tool_call_output="<tool_call>\n<function=get_weather>\n<parameter=city>Tokyo</parameter>\n</function>\n</tool_call>",
+    parallel_tool_calls_output="<tool_call>\n<function=get_weather>\n<parameter=city>Tokyo</parameter>\n</function>\n</tool_call><tool_call>\n<function=get_time>\n<parameter=timezone>Asia/Tokyo</parameter>\n</function>\n</tool_call>",
+    various_data_types_output=(
+        "<tool_call>\n<function=test_function>\n"
+        "<parameter=string_field>hello</parameter>\n"
+        "<parameter=int_field>42</parameter>\n"
+        "<parameter=float_field>3.14</parameter>\n"
+        "<parameter=bool_field>true</parameter>\n"
+        "<parameter=null_field>null</parameter>\n"
+        '<parameter=array_field>["a", "b", "c"]</parameter>\n'
+        '<parameter=object_field>{"nested": "value"}</parameter>\n'
+        "</function>\n</tool_call>"
+    ),
+    empty_arguments_output="<tool_call>\n<function=refresh>\n</function>\n</tool_call>",
+    surrounding_text_output=(
+        "Let me check the weather for you.\n\n"
+        "<tool_call>\n<function=get_weather>\n"
+        "<parameter=city>Tokyo</parameter>\n"
+        "</function>\n</tool_call>\n\n"
+        "I will get that information."
+    ),
+    escaped_strings_output=(
+        "<tool_call>\n<function=test_function>\n"
+        '<parameter=quoted>He said "hello"</parameter>\n'
+        "<parameter=path>C:\\Users\\file.txt</parameter>\n"
+        "<parameter=newline>line1\nline2</parameter>\n"
+        "</function>\n</tool_call>"
+    ),
+    malformed_input_outputs=[
+        "<tool_call><function=func>",
+        "<tool_call><function=></function></tool_call>",
+    ],
+    # Expected results
+    single_tool_call_expected_name="get_weather",
+    single_tool_call_expected_args={"city": "Tokyo"},
+    parallel_tool_calls_count=2,
+    parallel_tool_calls_names=["get_weather", "get_time"],
+    xfail_streaming={},
+    supports_typed_arguments=False,
+)
+
+
+_DUP_ID = "old parser emits duplicate tool call IDs during streaming"
+_OLD_STREAMING_XFAILS = {
+    "test_single_tool_call_simple_args": _DUP_ID,
+    "test_parallel_tool_calls": _DUP_ID,
+    "test_various_data_types": _DUP_ID,
+    "test_empty_arguments": _DUP_ID,
+    "test_surrounding_text": _DUP_ID,
+    "test_escaped_strings": _DUP_ID,
+    "test_streaming_reconstruction": (
+        "old parser streaming produces inconsistent output"
+    ),
+}
+
 
 class TestQwen3xmlToolParser(ToolParserTests):
     @pytest.fixture
     def test_config(self) -> ToolParserTestConfig:
         return ToolParserTestConfig(
             parser_name="qwen3_xml",
-            # Test data
-            no_tool_calls_output="This is a regular response without any tool calls.",
-            single_tool_call_output="<tool_call>\n<function=get_weather>\n<parameter=city>Tokyo</parameter>\n</function>\n</tool_call>",
-            parallel_tool_calls_output="<tool_call>\n<function=get_weather>\n<parameter=city>Tokyo</parameter>\n</function>\n</tool_call><tool_call>\n<function=get_time>\n<parameter=timezone>Asia/Tokyo</parameter>\n</function>\n</tool_call>",
-            various_data_types_output=(
-                "<tool_call>\n<function=test_function>\n"
-                "<parameter=string_field>hello</parameter>\n"
-                "<parameter=int_field>42</parameter>\n"
-                "<parameter=float_field>3.14</parameter>\n"
-                "<parameter=bool_field>true</parameter>\n"
-                "<parameter=null_field>null</parameter>\n"
-                '<parameter=array_field>["a", "b", "c"]</parameter>\n'
-                '<parameter=object_field>{"nested": "value"}</parameter>\n'
-                "</function>\n</tool_call>"
-            ),
-            empty_arguments_output="<tool_call>\n<function=refresh>\n</function>\n</tool_call>",
-            surrounding_text_output=(
-                "Let me check the weather for you.\n\n"
-                "<tool_call>\n<function=get_weather>\n"
-                "<parameter=city>Tokyo</parameter>\n"
-                "</function>\n</tool_call>\n\n"
-                "I will get that information."
-            ),
-            escaped_strings_output=(
-                "<tool_call>\n<function=test_function>\n"
-                '<parameter=quoted>He said "hello"</parameter>\n'
-                "<parameter=path>C:\\Users\\file.txt</parameter>\n"
-                "<parameter=newline>line1\nline2</parameter>\n"
-                "</function>\n</tool_call>"
-            ),
-            malformed_input_outputs=[
-                "<tool_call><function=func>",
-                "<tool_call><function=></function></tool_call>",
-            ],
-            # Expected results
-            single_tool_call_expected_name="get_weather",
-            single_tool_call_expected_args={"city": "Tokyo"},
-            parallel_tool_calls_count=2,
-            parallel_tool_calls_names=["get_weather", "get_time"],
-            xfail_streaming={},
-            supports_typed_arguments=False,
+            **{**_QWEN3XML_CONFIG, "xfail_streaming": _OLD_STREAMING_XFAILS},
         )
+
+
+class TestQwen3xmlEngineToolParser(ToolParserTests):
+    @pytest.fixture
+    def test_config(self) -> ToolParserTestConfig:
+        return ToolParserTestConfig(parser_name="qwen3_xml_engine", **_QWEN3XML_CONFIG)

@@ -20,18 +20,35 @@ from vllm.tool_parsers.gemma4_tool_parser import (
 # Fixtures
 # ---------------------------------------------------------------------------
 
+TOOL_CALL_START_ID = 48
+TOOL_CALL_END_ID = 49
+
 
 @pytest.fixture
 def mock_tokenizer():
     tokenizer = MagicMock()
     tokenizer.encode.return_value = [1, 2, 3]
-    # Include the tool call start token in the vocab for the parser
-    tokenizer.get_vocab.return_value = {TOOL_CALL_START: 48, TOOL_CALL_END: 49}
+    tokenizer.get_vocab.return_value = {
+        TOOL_CALL_START: TOOL_CALL_START_ID,
+        TOOL_CALL_END: TOOL_CALL_END_ID,
+    }
     return tokenizer
 
 
+@pytest.fixture(params=["old", "engine"], ids=["old", "engine"])
+def parser(mock_tokenizer, request):
+    if request.param == "old":
+        return Gemma4ToolParser(mock_tokenizer)
+    else:
+        from vllm.tool_parsers.gemma4_engine_tool_parser import (
+            Gemma4EngineToolParser,
+        )
+
+        return Gemma4EngineToolParser(mock_tokenizer)
+
+
 @pytest.fixture
-def parser(mock_tokenizer):
+def old_parser(mock_tokenizer):
     return Gemma4ToolParser(mock_tokenizer)
 
 
@@ -294,10 +311,11 @@ class TestExtractToolCalls:
         assert args == {"is_active": True, "count": 42, "score": 3.14}
 
     def test_incomplete_tool_call(self, parser, mock_request):
+        if not getattr(parser, "engine_based_streaming", False):
+            pytest.xfail("old parser requires closing <tool_call|> tag")
         model_output = '<|tool_call>call:get_weather{location:<|"|>London'
         result = parser.extract_tool_calls(model_output, mock_request)
 
-        # The engine extracts the partial tool call with available data
         assert result.tools_called is True
         assert len(result.tool_calls) == 1
         assert result.tool_calls[0].function.name == "get_weather"
@@ -349,7 +367,7 @@ class TestStreamingExtraction:
     """
 
     def _simulate_streaming(
-        self, parser: Gemma4ToolParser, mock_request: Any, chunks: list[str]
+        self, parser: Any, mock_request: Any, chunks: list[str]
     ) -> list[tuple[Any, str]]:
         """Feed chunks through the streaming parser and collect results.
 

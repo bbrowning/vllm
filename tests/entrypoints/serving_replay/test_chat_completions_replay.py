@@ -15,6 +15,7 @@ from tests.entrypoints.openai.utils import accumulate_streaming_response
 from tests.entrypoints.serving_replay.mock_serving import build_serving_chat
 from tests.entrypoints.serving_replay.replay_harness import (
     CHUNK_SIZES,
+    DELEGATING_OLD_XFAIL_SAMPLES,
     assert_chat_completion_response,
     get_parser_cls,
     load_serving_samples,
@@ -45,11 +46,15 @@ def _build_request(sample, *, stream: bool = True) -> ChatCompletionRequest:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "parser_mode", ["engine", "delegating"], ids=lambda m: f"mode={m}"
+    "parser_mode",
+    ["engine", "delegating", "delegating_engine"],
+    ids=lambda m: f"mode={m}",
 )
 @pytest.mark.parametrize("chunk_size", CHUNK_SIZES, ids=lambda c: f"chunk={c}")
 @pytest.mark.parametrize("sample", _all_samples, ids=lambda s: s.id)
 async def test_streaming(sample, chunk_size, parser_mode):
+    if parser_mode == "delegating" and sample.id in DELEGATING_OLD_XFAIL_SAMPLES:
+        pytest.xfail("old delegating parser has streaming differences")
     tokenizer = make_mock_tokenizer(sample)
     serving_chat = build_serving_chat(
         get_parser_cls(sample.parser_name, mode=parser_mode)

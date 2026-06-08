@@ -12,7 +12,16 @@ from vllm.reasoning import ReasoningParser, ReasoningParserManager
 # Using mistral tokenizer as a generic mock since the actual model is not on HF
 from vllm.tokenizers.registry import get_tokenizer
 
-parser_name = "gemma4"
+PARSER_NAMES = ["gemma4", "gemma4_engine"]
+
+_OLD_PARSER_XFAIL_IDS = {
+    "invalid_simple",
+    "invalid_complete",
+    "empty",
+    "new_line",
+    "thought_prefix_only",
+    "thought_prefix_only_streaming",
+}
 
 
 @pytest.fixture(scope="module")
@@ -221,11 +230,18 @@ def gemma4_encode_output(generic_tokenizer, output: str) -> list[int]:
 
 
 @pytest.mark.parametrize("streaming, param_dict", TEST_CASES)
+@pytest.mark.parametrize("parser_name", PARSER_NAMES)
 def test_gemma4_reasoning(
     streaming: bool,
     param_dict: dict,
+    parser_name: str,
     generic_tokenizer,
+    request,
 ):
+    test_id = request.node.callspec.id.split("-")[-1]
+    if parser_name == "gemma4" and test_id in _OLD_PARSER_XFAIL_IDS:
+        pytest.xfail("old parser handles edge case differently than engine")
+
     output = param_dict["output"]
     output_tokens = gemma4_encode_output(generic_tokenizer, output)
 
@@ -233,9 +249,6 @@ def test_gemma4_reasoning(
         generic_tokenizer
     )
 
-    # We use the generic run_reasoning_extraction from utils
-    # Use decode per token to get standard spaces instead of
-    # SentencePiece space characters
     output_token_strings = [generic_tokenizer.decode([t]) for t in output_tokens]
     reasoning, content = run_reasoning_extraction(
         parser, output_token_strings, streaming=streaming
@@ -244,12 +257,12 @@ def test_gemma4_reasoning(
     assert reasoning == param_dict["reasoning"]
     assert content == param_dict["content"]
 
-    # Test is_reasoning_end
     is_reasoning_end = parser.is_reasoning_end(output_tokens)
     assert is_reasoning_end == param_dict["is_reasoning_end"]
 
 
-def test_gemma4_adjust_request(generic_tokenizer):
+@pytest.mark.parametrize("parser_name", PARSER_NAMES)
+def test_gemma4_adjust_request(parser_name, generic_tokenizer):
     parser: ReasoningParser = ReasoningParserManager.get_reasoning_parser(parser_name)(
         generic_tokenizer
     )
@@ -262,7 +275,10 @@ def test_gemma4_adjust_request(generic_tokenizer):
     assert result is request
 
 
-def test_gemma4_previous_turn_reasoning_is_reasoning_end(generic_tokenizer):
+@pytest.mark.parametrize("parser_name", PARSER_NAMES)
+def test_gemma4_previous_turn_reasoning_is_reasoning_end(
+    parser_name, generic_tokenizer
+):
     output = (
         "<|channel>thought\n1st thought<channel|>1st content<turn|>\n"
         "<|turn>user\nThanks<|turn>model\n"

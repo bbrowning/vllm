@@ -29,8 +29,8 @@ _REASONING_PARSERS_TO_REGISTER = {
         "DeepSeekV3ReasoningParser",
     ),
     "deepseek_v4": (
-        "deepseek_v4_reasoning_parser",
-        "DeepSeekV4ParserReasoningAdapter",
+        "deepseek_v3_reasoning_parser",
+        "DeepSeekV3ReasoningParser",
     ),
     "poolside_v1": (
         "poolside_v1_reasoning_parser",
@@ -50,7 +50,7 @@ _REASONING_PARSERS_TO_REGISTER = {
     ),
     "gemma4": (
         "gemma4_reasoning_parser",
-        "Gemma4ParserReasoningAdapter",
+        "Gemma4ReasoningParser",
     ),
     "glm45": (
         "deepseek_v3_reasoning_parser",
@@ -82,7 +82,7 @@ _REASONING_PARSERS_TO_REGISTER = {
     ),
     "mimo": (
         "qwen3_reasoning_parser",
-        "Qwen3ParserReasoningAdapter",
+        "Qwen3ReasoningParser",
     ),
     "minimax_m2": (
         "minimax_m2_reasoning_parser",
@@ -98,7 +98,7 @@ _REASONING_PARSERS_TO_REGISTER = {
     ),
     "nemotron_v3": (
         "nemotron_v3_reasoning_parser",
-        "NemotronV3ParserReasoningAdapter",
+        "NemotronV3ReasoningParser",
     ),
     "olmo3": (
         "olmo3_reasoning_parser",
@@ -106,7 +106,7 @@ _REASONING_PARSERS_TO_REGISTER = {
     ),
     "qwen3": (
         "qwen3_reasoning_parser",
-        "Qwen3ParserReasoningAdapter",
+        "Qwen3ReasoningParser",
     ),
     "seed_oss": (
         "seedoss_reasoning_parser",
@@ -119,6 +119,23 @@ _REASONING_PARSERS_TO_REGISTER = {
     "step3p5": (
         "step3p5_reasoning_parser",
         "Step3p5ReasoningParser",
+    ),
+    # Engine-based parser adapters (opt-in via --reasoning-parser=X_engine)
+    "deepseek_v4_engine": (
+        "deepseek_v4_reasoning_parser",
+        "DeepSeekV4ParserReasoningAdapter",
+    ),
+    "gemma4_engine": (
+        "gemma4_engine_reasoning_parser",
+        "Gemma4ParserReasoningAdapter",
+    ),
+    "nemotron_v3_engine": (
+        "nemotron_v3_engine_reasoning_parser",
+        "NemotronV3ParserReasoningAdapter",
+    ),
+    "qwen3_engine": (
+        "qwen3_engine_reasoning_parser",
+        "Qwen3ParserReasoningAdapter",
     ),
 }
 

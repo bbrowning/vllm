@@ -21,8 +21,14 @@ from vllm.entrypoints.openai.engine.protocol import (
 )
 from vllm.tokenizers import TokenizerLike, get_tokenizer
 from vllm.tokenizers.detokenizer_utils import detokenize_incrementally
+from vllm.tool_parsers.qwen3coder_engine_tool_parser import (
+    Qwen3CoderEngineToolParser,
+)
 from vllm.tool_parsers.qwen3coder_tool_parser import (
     Qwen3CoderToolParser,
+)
+from vllm.tool_parsers.qwen3xml_engine_tool_parser import (
+    Qwen3XMLEngineToolParser,
 )
 from vllm.tool_parsers.qwen3xml_tool_parser import (
     Qwen3XMLToolParser,
@@ -46,13 +52,24 @@ def qwen3_xml_tool_parser(qwen3_tokenizer, sample_tools):
     return Qwen3XMLToolParser(qwen3_tokenizer, tools=sample_tools)
 
 
-@pytest.fixture(params=["xml"])
-def qwen3_tool_parser_parametrized(qwen3_tool_parser, qwen3_xml_tool_parser, request):
-    """Parameterized fixture that provides both parser types for testing"""
-    if request.param == "original":
-        return qwen3_tool_parser
-    else:
+@pytest.fixture
+def qwen3_coder_engine_tool_parser(qwen3_tokenizer, sample_tools):
+    return Qwen3CoderEngineToolParser(qwen3_tokenizer, tools=sample_tools)
+
+
+@pytest.fixture
+def qwen3_xml_engine_tool_parser(qwen3_tokenizer, sample_tools):
+    return Qwen3XMLEngineToolParser(qwen3_tokenizer, tools=sample_tools)
+
+
+@pytest.fixture(params=["xml", "xml_engine"])
+def qwen3_tool_parser_parametrized(
+    qwen3_xml_tool_parser, qwen3_xml_engine_tool_parser, request
+):
+    if request.param == "xml":
         return qwen3_xml_tool_parser
+    else:
+        return qwen3_xml_engine_tool_parser
 
 
 WEATHER_PARAMS = {

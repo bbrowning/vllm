@@ -18,6 +18,7 @@ from tests.entrypoints.serving_replay.mock_serving import (
 )
 from tests.entrypoints.serving_replay.replay_harness import (
     CHUNK_SIZES,
+    DELEGATING_OLD_XFAIL_SAMPLES,
     accumulate_anthropic_sse,
     assert_anthropic_response,
     get_parser_cls,
@@ -76,11 +77,15 @@ async def _generate_openai_sse_stream(sample, chunk_size, parser_mode="engine"):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "parser_mode", ["engine", "delegating"], ids=lambda m: f"mode={m}"
+    "parser_mode",
+    ["engine", "delegating", "delegating_engine"],
+    ids=lambda m: f"mode={m}",
 )
 @pytest.mark.parametrize("chunk_size", CHUNK_SIZES, ids=lambda c: f"chunk={c}")
 @pytest.mark.parametrize("sample", _all_samples, ids=lambda s: s.id)
 async def test_anthropic_streaming(sample, chunk_size, parser_mode):
+    if parser_mode == "delegating" and sample.id in DELEGATING_OLD_XFAIL_SAMPLES:
+        pytest.xfail("old delegating parser has streaming differences")
     anthropic_serving = build_anthropic_serving(
         get_parser_cls(sample.parser_name, mode=parser_mode)
     )

@@ -17,6 +17,7 @@ import pytest
 from tests.entrypoints.serving_replay.mock_serving import build_serving_responses
 from tests.entrypoints.serving_replay.replay_harness import (
     CHUNK_SIZES,
+    DELEGATING_OLD_XFAIL_SAMPLES,
     assert_responses_events,
     get_parser_cls,
     load_serving_samples,
@@ -70,11 +71,15 @@ def _build_responses_request(sample) -> ResponsesRequest:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "parser_mode", ["engine", "delegating"], ids=lambda m: f"mode={m}"
+    "parser_mode",
+    ["engine", "delegating", "delegating_engine"],
+    ids=lambda m: f"mode={m}",
 )
 @pytest.mark.parametrize("chunk_size", CHUNK_SIZES, ids=lambda c: f"chunk={c}")
 @pytest.mark.parametrize("sample", _all_samples, ids=lambda s: s.id)
 async def test_responses_streaming(sample, chunk_size, parser_mode):
+    if parser_mode == "delegating" and sample.id in DELEGATING_OLD_XFAIL_SAMPLES:
+        pytest.xfail("old delegating parser has streaming differences")
     tokenizer = make_mock_tokenizer(sample)
     parser_cls = get_parser_cls(sample.parser_name, mode=parser_mode)
     serving_responses = build_serving_responses(

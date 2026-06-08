@@ -169,8 +169,6 @@ def test_nemotron_v3_force_nonempty_keeps_real_content(
     tokenizer: FakeNemotronTokenizer,
     parser_name: str,
 ):
-    # When real content follows the closing tag nothing is promoted: the
-    # content after </think> is returned as-is and reasoning stays separate.
     parser_cls = ReasoningParserManager.get_reasoning_parser(parser_name)
     parser = parser_cls(tokenizer)
     request = ChatCompletionRequest(

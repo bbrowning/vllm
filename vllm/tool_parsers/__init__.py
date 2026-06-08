@@ -194,6 +194,27 @@ _TOOL_PARSERS_TO_REGISTER = {
         "apertus_tool_parser",
         "ApertusToolParser",
     ),
+    # Engine-based parser adapters (opt-in via --tool-call-parser=X_engine)
+    "deepseek_v4_engine": (
+        "deepseekv4_engine_tool_parser",
+        "DeepSeekV4EngineToolParser",
+    ),
+    "gemma4_engine": (
+        "gemma4_engine_tool_parser",
+        "Gemma4EngineToolParser",
+    ),
+    "nemotron_v3_engine": (
+        "nemotron_v3_engine_tool_parser",
+        "NemotronV3EngineToolParser",
+    ),
+    "qwen3_coder_engine": (
+        "qwen3coder_engine_tool_parser",
+        "Qwen3CoderEngineToolParser",
+    ),
+    "qwen3_xml_engine": (
+        "qwen3xml_engine_tool_parser",
+        "Qwen3XMLEngineToolParser",
+    ),
 }
 
 

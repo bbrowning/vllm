@@ -17,6 +17,7 @@ from vllm.entrypoints.openai.chat_completion.protocol import (
     FunctionDefinition,
 )
 from vllm.tool_parsers import ToolParserManager
+from vllm.tool_parsers.deepseekv4_engine_tool_parser import DeepSeekV4EngineToolParser
 from vllm.tool_parsers.deepseekv4_tool_parser import DeepSeekV4ToolParser
 
 MOCK_TOKENIZER = MagicMock()
@@ -67,7 +68,14 @@ def sample_tools() -> list[ChatCompletionToolsParam]:
     ]
 
 
-def make_parser(tools=None) -> DeepSeekV4ToolParser:
+@pytest.fixture(params=["old", "engine"], ids=["old", "engine"])
+def parser_variant(request):
+    return request.param
+
+
+def make_parser(tools=None, variant="old"):
+    if variant == "engine":
+        return DeepSeekV4EngineToolParser(MOCK_TOKENIZER, tools=tools)
     return DeepSeekV4ToolParser(MOCK_TOKENIZER, tools=tools)
 
 
@@ -123,8 +131,8 @@ def test_registered():
     assert ToolParserManager.get_tool_parser("deepseek_v4") is DeepSeekV4ToolParser
 
 
-def test_extract_tool_calls():
-    parser = make_parser()
+def test_extract_tool_calls(parser_variant):
+    parser = make_parser(variant=parser_variant)
     model_output = "Let me check. " + build_tool_call(
         "get_weather", {"location": "Beijing", "unit": "celsius"}
     )
@@ -142,8 +150,8 @@ def test_extract_tool_calls():
     }
 
 
-def test_function_calls_block_is_not_accepted():
-    parser = make_parser()
+def test_function_calls_block_is_not_accepted(parser_variant):
+    parser = make_parser(variant=parser_variant)
     model_output = build_tool_call("search", {"query": "vllm"}).replace(
         "tool_calls", "function_calls"
     )
@@ -154,8 +162,8 @@ def test_function_calls_block_is_not_accepted():
     assert result.content == model_output
 
 
-def test_streaming_extracts_complete_invokes():
-    parser = make_parser()
+def test_streaming_extracts_complete_invokes(parser_variant):
+    parser = make_parser(variant=parser_variant)
     full_text = build_tool_call("search", {"query": "deepseek v4"})
 
     deltas = stream(parser, full_text, chunk_size=5)
@@ -171,7 +179,7 @@ def test_streaming_extracts_complete_invokes():
     assert json.loads(reconstruct_args(deltas)) == {"query": "deepseek v4"}
 
 
-def test_streaming_emits_incremental_argument_chunks():
+def test_streaming_emits_incremental_argument_chunks(parser_variant):
     tool = ChatCompletionToolsParam(
         function=FunctionDefinition(
             name="plan_trip",
@@ -186,7 +194,7 @@ def test_streaming_emits_incremental_argument_chunks():
             },
         ),
     )
-    parser = make_parser(tools=[tool])
+    parser = make_parser(tools=[tool], variant=parser_variant)
     full_text = (
         f"{TC_START}\n"
         f'{INV_START}plan_trip">\n'
@@ -252,7 +260,7 @@ def test_get_vllm_registry_structural_tag_returns_structural_tag(
         assert isinstance(tag, StructuralTag)
 
 
-def test_extract_tool_calls_arguments_wrapper():
+def test_extract_tool_calls_arguments_wrapper(parser_variant):
     mock_tokenizer = MagicMock()
     mock_tokenizer.get_vocab.return_value = {}
 
@@ -267,7 +275,7 @@ def test_extract_tool_calls_arguments_wrapper():
         },
     )
 
-    parser = DeepSeekV4ToolParser(mock_tokenizer, tools=[tool])
+    parser = make_parser(tools=[tool], variant=parser_variant)
     request = MagicMock()
     request.tools = [tool]
 
@@ -286,7 +294,7 @@ def test_extract_tool_calls_arguments_wrapper():
 
 
 @pytest.mark.skip_global_cleanup
-def test_composed_schema_converts_object_and_array_params():
+def test_composed_schema_converts_object_and_array_params(parser_variant):
     tool = ChatCompletionToolsParam(
         type="function",
         function={
@@ -309,7 +317,7 @@ def test_composed_schema_converts_object_and_array_params():
             },
         },
     )
-    parser = make_parser(tools=[tool])
+    parser = make_parser(tools=[tool], variant=parser_variant)
     request = make_request(tools=[tool])
     model_output = (
         f"{TC_START}\n"

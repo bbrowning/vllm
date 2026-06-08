@@ -43,7 +43,7 @@ _ENGINE_PARSERS: dict[str, type[Parser]] = {
     "nemotron_v3_engine": NemotronV3Parser,
 }
 
-_DELEGATING_PAIRINGS: dict[str, tuple[str, str]] = {
+_DELEGATING_OLD_PAIRINGS: dict[str, tuple[str, str]] = {
     "deepseek_v4_engine": ("deepseek_v4", "deepseek_v4"),
     "qwen3_engine": ("qwen3_xml", "qwen3"),
     "gemma4_engine": ("gemma4", "gemma4"),
@@ -52,7 +52,30 @@ _DELEGATING_PAIRINGS: dict[str, tuple[str, str]] = {
     "qwen3_coder_engine": ("qwen3_coder", "qwen3"),
 }
 
+_DELEGATING_ENGINE_PAIRINGS: dict[str, tuple[str, str]] = {
+    "deepseek_v4_engine": ("deepseek_v4_engine", "deepseek_v4_engine"),
+    "qwen3_engine": ("qwen3_xml_engine", "qwen3_engine"),
+    "gemma4_engine": ("gemma4_engine", "gemma4_engine"),
+    "nemotron_v3_engine": ("qwen3_coder_engine", "nemotron_v3_engine"),
+    "qwen3_xml_engine": ("qwen3_xml_engine", "qwen3_engine"),
+    "qwen3_coder_engine": ("qwen3_coder_engine", "qwen3_engine"),
+}
+
 CHUNK_SIZES = [1, 2, 3, 5, 11, 23, None]
+
+DELEGATING_OLD_XFAIL_SAMPLES: frozenset[str] = frozenset(
+    {
+        "dsv4-whitespace-before-tool-001",
+        "gemma4-bash-date-percent-005",
+        "gemma4-no-reasoning-tool-004",
+        "gemma4-reasoning-only-003",
+        "gemma4-thought-prefix-leak-006",
+        "gemma4-two-bash-tools-002",
+        "gemma4-weather-tool-001",
+        "qwen3-live-edit-tool-010",
+        "qwen3-live-reasoning-read-008",
+    }
+)
 
 
 @dataclass
@@ -140,9 +163,14 @@ def make_mock_tokenizer(sample: ServingSample):
 
 
 @lru_cache
-def get_delegating_parser_cls(parser_name: str) -> type[Parser]:
+def get_delegating_parser_cls(parser_name: str, pairings: str = "old") -> type[Parser]:
     """Create a DelegatingParser class for the given engine parser name."""
-    tool_name, reasoning_name = _DELEGATING_PAIRINGS[parser_name]
+    table = (
+        _DELEGATING_ENGINE_PAIRINGS
+        if pairings == "engine"
+        else _DELEGATING_OLD_PAIRINGS
+    )
+    tool_name, reasoning_name = table[parser_name]
     parser_cls = ParserManager.get_parser(
         tool_parser_name=tool_name,
         reasoning_parser_name=reasoning_name,
@@ -156,7 +184,9 @@ def get_parser_cls(parser_name: str, mode: str = "engine") -> type[Parser]:
     """Look up a parser class by name and mode."""
     if mode == "engine":
         return _ENGINE_PARSERS[parser_name]
-    return get_delegating_parser_cls(parser_name)
+    if mode == "delegating_engine":
+        return get_delegating_parser_cls(parser_name, pairings="engine")
+    return get_delegating_parser_cls(parser_name, pairings="old")
 
 
 # ---------------------------------------------------------------------------
