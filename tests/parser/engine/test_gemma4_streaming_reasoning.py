@@ -957,3 +957,89 @@ class TestAdapterExtractReasoning:
         reasoning, content = adapter.extract_reasoning(text, request_obj)
         assert reasoning is None
         assert content == text
+
+
+# ── Schema-aware type coercion during streaming ────────────────────
+
+
+class TestGemma4SchemaAwareTypeCoercion:
+    """Verify that streaming and non-streaming produce identical
+    type-fixed arguments when tool schemas declare string parameters
+    but the model outputs bare numbers/booleans."""
+
+    @pytest.fixture
+    def tools(self):
+        from vllm.entrypoints.openai.chat_completion.protocol import (
+            ChatCompletionToolsParam,
+        )
+
+        return [
+            ChatCompletionToolsParam(
+                type="function",
+                function={
+                    "name": "update_record",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "zipcode": {"type": "string"},
+                            "count": {"type": "integer"},
+                        },
+                    },
+                },
+            )
+        ]
+
+    @pytest.fixture
+    def parser_with_tools(self, tool_call_tokenizer, tools):
+        return Gemma4Parser(tool_call_tokenizer, tools=tools)
+
+    def test_streaming_string_param_not_coerced(self, parser_with_tools, mock_request):
+        """A numeric value for a string-typed param must remain a string
+        in the streamed output, matching the non-streaming result."""
+        chunks = [
+            "<|tool_call>",
+            "call:update_record{",
+            "zipcode:12345}",
+            "<tool_call|>",
+        ]
+
+        results = simulate_tool_streaming(parser_with_tools, mock_request, chunks)
+        args_text = collect_tool_arguments(results)
+        parsed = json.loads(args_text)
+        assert parsed["zipcode"] == "12345"
+
+    def test_streaming_mixed_types(self, parser_with_tools, mock_request):
+        """String params get type-fixed, integer params stay integers."""
+        chunks = [
+            "<|tool_call>",
+            "call:update_record{",
+            "zipcode:90210,",
+            "count:42}",
+            "<tool_call|>",
+        ]
+
+        results = simulate_tool_streaming(parser_with_tools, mock_request, chunks)
+        args_text = collect_tool_arguments(results)
+        parsed = json.loads(args_text)
+        assert parsed["zipcode"] == "90210"
+        assert parsed["count"] == 42
+
+    def test_streaming_matches_non_streaming(self, parser_with_tools, mock_request):
+        """Concatenated streaming deltas must produce the same arguments
+        as non-streaming extraction."""
+        text = "<|tool_call>call:update_record{zipcode:12345}<tool_call|>"
+
+        non_streaming = parser_with_tools.extract_tool_calls(text, mock_request)
+        ns_args = json.loads(non_streaming.tool_calls[0].function.arguments)
+
+        chunks = [
+            "<|tool_call>",
+            "call:update_record{",
+            "zipcode:1234",
+            "5}",
+            "<tool_call|>",
+        ]
+        results = simulate_tool_streaming(parser_with_tools, mock_request, chunks)
+        s_args = json.loads(collect_tool_arguments(results))
+
+        assert s_args == ns_args

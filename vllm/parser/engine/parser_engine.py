@@ -29,7 +29,7 @@ from vllm.parser.abstract_parser import Parser, StreamState
 from vllm.parser.engine.events import EventType, SemanticEvent
 from vllm.parser.engine.parser_engine_config import ParserEngineConfig, ParserState
 from vllm.parser.engine.streaming_parser_engine import StreamingParserEngine
-from vllm.tool_parsers.utils import find_tool_properties
+from vllm.tool_parsers.utils import extract_types_from_schema, find_tool_properties
 
 if TYPE_CHECKING:
     from vllm.entrypoints.openai.chat_completion.protocol import (
@@ -178,7 +178,9 @@ class ParserEngine(Parser):
             if isinstance(value, str):
                 continue
             prop = properties.get(key)
-            if not isinstance(prop, dict) or prop.get("type") != "string":
+            if not isinstance(prop, dict):
+                continue
+            if "string" not in extract_types_from_schema(prop):
                 continue
             if isinstance(value, bool):
                 args[key] = "true" if value else "false"
@@ -763,6 +765,9 @@ class ParserEngine(Parser):
         if not current_json:
             return None
 
+        if slot.name:
+            current_json = self._fix_arg_types(current_json, slot.name)
+
         prev = slot.streamed_json
         safe_json = current_json
         while safe_json and safe_json[-1] in ("}", '"', "]"):
@@ -799,6 +804,8 @@ class ParserEngine(Parser):
 
         prev = slot.streamed_json
         if final_json and len(final_json) > len(prev):
+            if prev and not final_json.startswith(prev):
+                return None
             diff = final_json[len(prev) :]
             slot.streamed_json = final_json
             return diff

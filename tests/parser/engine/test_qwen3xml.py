@@ -670,3 +670,57 @@ class TestSchemaAwareTypeCoercion:
         args = json.loads(args_str)
         assert args["taskId"] == "1"
         assert isinstance(args["taskId"], str)
+
+
+class TestAnyOfTypeCoercion:
+    """Verify that _fix_arg_types handles union types (anyOf/oneOf)."""
+
+    @pytest.fixture
+    def tools_with_anyof(self):
+        from vllm.entrypoints.openai.chat_completion.protocol import (
+            ChatCompletionToolsParam,
+        )
+
+        return [
+            ChatCompletionToolsParam(
+                type="function",
+                function={
+                    "name": "set_config",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "port": {
+                                "anyOf": [
+                                    {"type": "string"},
+                                    {"type": "null"},
+                                ],
+                            },
+                            "count": {"type": "integer"},
+                        },
+                    },
+                },
+            )
+        ]
+
+    @pytest.fixture
+    def parser_with_anyof(self, mock_tokenizer, tools_with_anyof):
+        return ParserEngine(
+            mock_tokenizer,
+            tools=tools_with_anyof,
+            parser_engine_config=qwen3xml_config(),
+        )
+
+    def test_anyof_string_param_not_coerced(self, parser_with_anyof, mock_request):
+        """A param with anyOf including 'string' must not be coerced
+        to integer."""
+        text = (
+            "<tool_call>\n"
+            "<function=set_config>\n"
+            "<parameter=port>8080</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+        result = parser_with_anyof.extract_tool_calls(text, mock_request)
+        assert result.tools_called
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args["port"] == "8080"
