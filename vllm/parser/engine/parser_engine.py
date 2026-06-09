@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from dataclasses import dataclass
 from functools import cached_property
 from typing import TYPE_CHECKING
 
@@ -41,13 +40,33 @@ if TYPE_CHECKING:
 logger = init_logger(__name__)
 
 
-@dataclass
 class ToolCallSlot:
-    id: str = ""
-    name: str = ""
-    args: str = ""
-    name_sent: bool = False
-    streamed_json: str = ""
+    __slots__ = (
+        "id",
+        "name",
+        "_args_parts",
+        "_args_joined",
+        "name_sent",
+        "streamed_json",
+    )
+
+    def __init__(self) -> None:
+        self.id: str = ""
+        self.name: str = ""
+        self._args_parts: list[str] = []
+        self._args_joined: str | None = ""
+        self.name_sent: bool = False
+        self.streamed_json: str = ""
+
+    @property
+    def args(self) -> str:
+        if self._args_joined is None:
+            self._args_joined = "".join(self._args_parts)
+        return self._args_joined
+
+    def append_args(self, value: str) -> None:
+        self._args_parts.append(value)
+        self._args_joined = None
 
 
 class ParserEngine(Parser):
@@ -653,7 +672,7 @@ class ParserEngine(Parser):
         idx = event.tool_index
         slot = self._tool_slots[idx]
         if event.value:
-            slot.args += event.value
+            slot.append_args(event.value)
 
         if not slot.name_sent:
             if slot.name:

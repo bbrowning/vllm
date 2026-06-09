@@ -142,6 +142,23 @@ class StreamingParserEngine:
     ) -> list[SemanticEvent]:
         if delta_token_ids:
             self._ever_had_token_ids = True
+
+        # Fast path: skip scanner and lexer when the delta is plain
+        # content with no special tokens and no terminal-starting chars.
+        if (
+            delta_text
+            and not self._lexer.buffer
+            and not self._scanner._deferred_terminals
+            and self._lexer._literal_first_chars.isdisjoint(delta_text)
+        ):
+            has_special = False
+            for tid in delta_token_ids:
+                if tid in self._resolved_token_ids or tid in self._drop_token_ids:
+                    has_special = True
+                    break
+            if not has_special:
+                return self._emit_for_state(delta_text)
+
         scanner_items = self._scanner.scan(delta_text, delta_token_ids)
 
         if len(scanner_items) == 1 and isinstance(scanner_items[0], TextChunk):

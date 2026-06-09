@@ -41,6 +41,8 @@ class LexerShape:
         "max_literal_len",
         "literal_first_chars",
         "has_only_literals",
+        "prefix_set",
+        "literals_by_first",
     )
 
     def __init__(self, terminals: list[TerminalDef]) -> None:
@@ -67,6 +69,18 @@ class LexerShape:
             lit[0] for lit, _ in literal_strings if lit
         )
         self.has_only_literals = not regex_terminals
+
+        prefix_set: set[str] = set()
+        for lit, _ in literal_strings:
+            for i in range(1, len(lit)):
+                prefix_set.add(lit[:i])
+        self.prefix_set = frozenset(prefix_set)
+
+        by_first: dict[str, list[tuple[str, str]]] = {}
+        for lit, name in literal_strings:
+            if lit:
+                by_first.setdefault(lit[0], []).append((lit, name))
+        self.literals_by_first = by_first
 
 
 class IncrementalLexer:
@@ -102,6 +116,8 @@ class IncrementalLexer:
         self._max_literal_len = shape.max_literal_len
         self._literal_first_chars = shape.literal_first_chars
         self._has_only_literals = shape.has_only_literals
+        self._prefix_set = shape.prefix_set
+        self._literals_by_first = shape.literals_by_first
 
     def reset(self) -> None:
         self.buffer = ""
@@ -126,10 +142,11 @@ class IncrementalLexer:
     def _drain(self) -> list[LexToken]:
         tokens: list[LexToken] = []
         first_chars = self._literal_first_chars
-        literals = self._literal_strings
         regex_terminals = self._regex_terminals
         content_terminal = self.content_terminal
         has_only_literals = self._has_only_literals
+        literals_by_first = self._literals_by_first
+        prefix_set = self._prefix_set
 
         while self.buffer:
             if has_only_literals and first_chars:
@@ -145,7 +162,8 @@ class IncrementalLexer:
 
             best_match: tuple[str, str, int] | None = None
 
-            for lit, name in literals:
+            first = self.buffer[0]
+            for lit, name in literals_by_first.get(first, ()):
                 if self.buffer.startswith(lit) and (
                     best_match is None or len(lit) > best_match[2]
                 ):
@@ -158,7 +176,7 @@ class IncrementalLexer:
                     if best_match is None or len(matched) > best_match[2]:
                         best_match = (tdef.name, matched, len(matched))
 
-            if self._has_prefix_match():
+            if self.buffer in prefix_set:
                 if best_match is not None:
                     tokens.append(LexToken(best_match[0], best_match[1]))
                     self.buffer = self.buffer[best_match[2] :]
@@ -179,16 +197,6 @@ class IncrementalLexer:
                     self.buffer = self.buffer[1:]
 
         return tokens
-
-    def _has_prefix_match(self) -> bool:
-        buf_len = len(self.buffer)
-        if buf_len >= self._max_literal_len:
-            return False
-        buf = self.buffer
-        for lit, _ in self._literal_strings:
-            if buf_len < len(lit) and lit.startswith(buf):
-                return True
-        return False
 
     def _find_content_boundary(self) -> int:
         buf = self.buffer

@@ -38,19 +38,22 @@ def accumulate_deltas(
                     if existing is None:
                         tool_calls_by_idx[tc.index] = {
                             "name": tc.function.name,
-                            "arguments": tc.function.arguments or "",
+                            "_args_parts": [tc.function.arguments or ""],
                         }
                     else:
-                        existing["arguments"] += tc.function.arguments or ""
+                        existing["_args_parts"].append(tc.function.arguments or "")
                 elif tc.function and tc.function.arguments:
                     existing = tool_calls_by_idx.get(tc.index)
                     if existing is not None:
-                        existing["arguments"] += tc.function.arguments
+                        existing["_args_parts"].append(tc.function.arguments)
 
     return {
         "reasoning": "".join(reasoning_parts),
         "content": "".join(content_parts),
-        "tool_calls": list(tool_calls_by_idx.values()),
+        "tool_calls": [
+            {"name": tc["name"], "arguments": "".join(tc["_args_parts"])}
+            for tc in tool_calls_by_idx.values()
+        ],
     }
 
 
