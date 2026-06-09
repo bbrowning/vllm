@@ -22,10 +22,10 @@ from tests.entrypoints.serving_replay.replay_harness import (
     accumulate_anthropic_sse,
     assert_anthropic_response,
     get_parser_cls,
-    load_serving_samples,
     make_mock_tokenizer,
     tokens_to_request_outputs,
 )
+from tests.parser.engine.trace_builder import build_serving_samples
 from vllm.entrypoints.openai.chat_completion.protocol import (
     ChatCompletionRequest,
     StreamOptions,
@@ -33,9 +33,9 @@ from vllm.entrypoints.openai.chat_completion.protocol import (
 from vllm.entrypoints.openai.engine.protocol import RequestResponseMetadata
 
 _all_samples = (
-    load_serving_samples("qwen3")
-    + load_serving_samples("gemma4")
-    + load_serving_samples("deepseek_v4")
+    build_serving_samples("qwen3")
+    + build_serving_samples("gemma4")
+    + build_serving_samples("deepseek_v4")
 )
 
 

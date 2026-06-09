@@ -2,9 +2,9 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Data-driven replay harness for serving-layer tests.
 
-Loads token sequences from JSONL fixtures and replays them through the
-full serving pipeline (Chat Completions, Anthropic Messages, Responses
-API) at different chunk sizes — without requiring a GPU.
+Replays token sequences through the full serving pipeline (Chat
+Completions, Anthropic Messages, Responses API) at different chunk
+sizes — without requiring a GPU.
 """
 
 from __future__ import annotations
@@ -15,10 +15,6 @@ from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
 
-# Re-use the mock tokenizer builder from the parser engine tests.
-from tests.parser.engine.replay_harness import (
-    DATA_DIR,
-)
 from tests.parser.engine.replay_harness import (
     make_mock_tokenizer as _make_mock_tokenizer,
 )
@@ -65,15 +61,21 @@ CHUNK_SIZES = [1, 2, 3, 5, 11, 23, None]
 
 DELEGATING_OLD_XFAIL_SAMPLES: frozenset[str] = frozenset(
     {
-        "dsv4-whitespace-before-tool-001",
-        "gemma4-bash-date-percent-005",
-        "gemma4-no-reasoning-tool-004",
-        "gemma4-reasoning-only-003",
-        "gemma4-thought-prefix-leak-006",
-        "gemma4-two-bash-tools-002",
-        "gemma4-weather-tool-001",
-        "qwen3-live-edit-tool-010",
-        "qwen3-live-reasoning-read-008",
+        "deepseek_v4-think-whitespace-tool",
+        "deepseek_v4-whitespace-before-tool",
+        "gemma4-complex-json-args",
+        "gemma4-content-only",
+        "gemma4-empty-reasoning-content",
+        "gemma4-think-content-tool",
+        "gemma4-think-then-content",
+        "gemma4-think-then-parallel-tools",
+        "gemma4-think-then-tool",
+        "gemma4-think-whitespace-tool",
+        "gemma4-tool-only",
+        "gemma4-whitespace-before-tool",
+        "qwen3-think-then-parallel-tools",
+        "qwen3-think-whitespace-tool",
+        "qwen3-whitespace-before-tool",
     }
 )
 
@@ -101,45 +103,6 @@ class ServingSample:
 
     def __repr__(self) -> str:
         return f"ServingSample({self.id!r})"
-
-
-def load_serving_samples(model: str) -> list[ServingSample]:
-    """Load all samples with ``serving`` section from
-    ``tests/parser/engine/fixtures/{model}.jsonl``."""
-    path = DATA_DIR / f"{model}.jsonl"
-    if not path.exists():
-        return []
-
-    samples = []
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        data = json.loads(line)
-        serving = data.get("serving")
-        if serving is None:
-            continue
-        tokens = [(t[0], t[1]) for t in data["tokens"]]
-        expected = data.get("expected", {})
-        samples.append(
-            ServingSample(
-                id=data["id"],
-                description=data.get("description", ""),
-                source=data.get("source", ""),
-                vocab=data.get("vocab", {}),
-                tokens=tokens,
-                expected_reasoning=expected.get("reasoning"),
-                expected_content=expected.get("content"),
-                expected_tool_calls=expected.get("tool_calls"),
-                parser_name=serving["parser_name"],
-                tool_choice=serving.get("tool_choice", "auto"),
-                tools=serving.get("tools"),
-                include_reasoning=serving.get("include_reasoning", True),
-                expected_finish_reason=serving.get("expected_finish_reason", "stop"),
-                chat_template_kwargs=serving.get("chat_template_kwargs"),
-            )
-        )
-    return samples
 
 
 def make_mock_tokenizer(sample: ServingSample):

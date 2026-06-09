@@ -20,19 +20,19 @@ from tests.entrypoints.serving_replay.replay_harness import (
     DELEGATING_OLD_XFAIL_SAMPLES,
     assert_responses_events,
     get_parser_cls,
-    load_serving_samples,
     make_mock_tokenizer,
     tokens_to_simple_contexts,
 )
+from tests.parser.engine.trace_builder import build_serving_samples
 from vllm.entrypoints.openai.engine.protocol import RequestResponseMetadata
 from vllm.entrypoints.openai.responses.context import SimpleContext
 from vllm.entrypoints.openai.responses.protocol import ResponsesRequest
 from vllm.sampling_params import SamplingParams
 
 _all_samples = (
-    load_serving_samples("qwen3")
-    + load_serving_samples("gemma4")
-    + load_serving_samples("deepseek_v4")
+    build_serving_samples("qwen3")
+    + build_serving_samples("gemma4")
+    + build_serving_samples("deepseek_v4")
 )
 
 

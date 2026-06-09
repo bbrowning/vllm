@@ -3,24 +3,21 @@
 """
 Benchmark comparing old (hand-rolled) vs new (engine-based) streaming parsers.
 
-Replays captured token sequences through parsers at token-by-token granularity,
+Replays token sequences through parsers at token-by-token granularity,
 measures per-sample timing, and optionally runs a scaling test to detect
 O(n) vs O(n^2) growth.
 
 Examples:
     # Compare old vs new Qwen3 parsers
     python benchmarks/benchmark_parsers.py \\
-        tests/parser/engine/data/qwen3.jsonl \\
-        --old qwen3_xml,qwen3 --new qwen3_engine
+        --model qwen3 --old qwen3_xml,qwen3 --new qwen3_engine
 
     # Scaling test to detect algorithmic complexity
     python benchmarks/benchmark_parsers.py \\
-        tests/parser/engine/data/qwen3.jsonl \\
-        --old qwen3_xml,qwen3 --new qwen3_engine --scaling
+        --model qwen3 --old qwen3_xml,qwen3 --new qwen3_engine --scaling
 
-    # Benchmark only the new parser
+    # Benchmark only the new parser (model auto-inferred from --new)
     python benchmarks/benchmark_parsers.py \\
-        tests/parser/engine/data/qwen3.jsonl \\
         --new qwen3_engine --iterations 200
 """
 
@@ -44,9 +41,14 @@ from tests.parser.engine.replay_harness import (  # noqa: E402
     Sample,
     assert_parse_output,
     collect_output,
-    load_samples_from_path,
     make_mock_tokenizer,
     replay_streaming,
+)
+from tests.parser.engine.trace_builder import (  # noqa: E402
+    build_samples as _build_samples,
+)
+from tests.parser.engine.trace_builder import (
+    build_scaling_sample as _build_scaling_sample,
 )
 from vllm.parser.abstract_parser import DelegatingParser, Parser  # noqa: E402
 from vllm.parser.engine.registered_adapters import (  # noqa: E402
@@ -476,6 +478,7 @@ def run_scaling(
     iterations: int,
     warmup: int,
     scaling_sample_id: str | None,
+    model: str | None = None,
 ) -> None:
     """Run scaling test to detect O(n) vs O(n^2) behavior."""
     if scaling_sample_id:
@@ -487,15 +490,18 @@ def run_scaling(
     else:
         sample = max(samples, key=lambda s: len(s.tokens))
 
+    base_token_count = len(sample.tokens)
     multipliers = [1, 2, 4, 8, 16]
 
     print()
     print("=" * 70)
     print("SCALING TEST")
     print("=" * 70)
-    print(f"Base sample: {sample.id} ({len(sample.tokens)} tokens)")
+    print(f"Base sample: {sample.id} ({base_token_count} tokens)")
     print(f"Multipliers: {multipliers}")
     print(f"Iterations: {iterations}, Warmup: {warmup}")
+    if model:
+        print("Using trace-builder generated scaling samples")
     print()
 
     for name, factory in factories.items():
@@ -510,18 +516,21 @@ def run_scaling(
         prev_mult: int | None = None
 
         for mult in multipliers:
-            scaled_tokens = sample.tokens * mult
-            scaled_sample = Sample(
-                id=f"{sample.id}-x{mult}",
-                description=f"Scaled {mult}x",
-                source="benchmark",
-                vocab=sample.vocab,
-                tokens=scaled_tokens,
-                expected_reasoning=None,
-                expected_content=None,
-                expected_tool_calls=None,
-                tools=sample.tools,
-            )
+            if model:
+                scaled_sample = _build_scaling_sample(model, base_token_count * mult)
+            else:
+                scaled_tokens = sample.tokens * mult
+                scaled_sample = Sample(
+                    id=f"{sample.id}-x{mult}",
+                    description=f"Scaled {mult}x",
+                    source="benchmark",
+                    vocab=sample.vocab,
+                    tokens=scaled_tokens,
+                    expected_reasoning=None,
+                    expected_content=None,
+                    expected_tool_calls=None,
+                    tools=sample.tools,
+                )
 
             raw = time_sample(factory, scaled_sample, iterations, warmup, chunk_size=1)
             median = statistics.median(raw.total) * 1e6
@@ -529,8 +538,6 @@ def run_scaling(
             if prev_median and prev_mult:
                 ratio = median / prev_median
                 token_ratio = mult / prev_mult
-                # O(n) -> ratio ~= token_ratio
-                # O(n^2) -> ratio ~= token_ratio^2
                 if ratio < token_ratio * 1.3:
                     hint = "~ O(n)"
                 elif ratio < token_ratio * token_ratio * 0.8:
@@ -543,7 +550,7 @@ def run_scaling(
                 hint = ""
 
             print(
-                f"  {mult:>5}  {len(scaled_tokens):>7}  "
+                f"  {mult:>5}  {len(scaled_sample.tokens):>7}  "
                 f"{median:>12.1f}  {ratio_str:>8}  {hint:>16}"
             )
 
@@ -559,9 +566,12 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "samples_file",
-        type=Path,
-        help="Path to JSONL samples file (e.g. tests/parser/engine/data/qwen3.jsonl)",
+        "--model",
+        type=str,
+        default=None,
+        metavar="MODEL",
+        help="Model name for trace-builder samples (e.g. qwen3, gemma4, "
+        "deepseek_v4, nemotron_v3). Auto-inferred from --new if omitted.",
     )
     parser.add_argument(
         "--old",
@@ -612,8 +622,19 @@ def main() -> None:
     if not args.old and not args.new:
         parser.error("At least one of --old or --new is required")
 
-    if not args.samples_file.exists():
-        parser.error(f"Samples file not found: {args.samples_file}")
+    if not args.model:
+        if args.new:
+            _ENGINE_TO_MODEL = {
+                "deepseek_v4_engine": "deepseek_v4",
+                "gemma4_engine": "gemma4",
+                "qwen3_engine": "qwen3",
+                "qwen3_xml_engine": "qwen3",
+                "qwen3_coder_engine": "qwen3",
+                "nemotron_v3_engine": "nemotron_v3",
+            }
+            args.model = _ENGINE_TO_MODEL.get(args.new)
+        if not args.model:
+            parser.error("Provide --model or --new (to auto-infer model)")
 
     factories: dict[str, ParserFactory] = {}
     if args.old:
@@ -631,12 +652,14 @@ def main() -> None:
     if args.new:
         factories[f"new ({args.new})"] = _make_new_parser_factory(args.new)
 
-    samples = load_samples_from_path(args.samples_file)
+    samples = _build_samples(args.model)
+    source_desc = f"trace-builder ({args.model})"
+
     if not samples:
-        print(f"No samples found in {args.samples_file}")
+        print(f"No samples found from {source_desc}")
         sys.exit(1)
 
-    print(f"Loaded {len(samples)} samples from {args.samples_file}")
+    print(f"Loaded {len(samples)} samples from {source_desc}")
     total_tokens = sum(len(s.tokens) for s in samples)
     print(f"Total tokens across all samples: {total_tokens}")
 
@@ -647,6 +670,7 @@ def main() -> None:
             args.iterations,
             args.warmup,
             args.scaling_sample,
+            model=args.model,
         )
     else:
         run_comparison(

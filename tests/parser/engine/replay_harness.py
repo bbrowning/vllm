@@ -2,25 +2,21 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Data-driven replay harness for parser engine testing.
 
-Loads token sequences from JSONL files and replays them through parsers
-at different chunk sizes to verify chunk-size invariance: the same
-token sequence must produce identical output regardless of how tokens
-are batched.
+Replays token sequences through parsers at different chunk sizes to
+verify chunk-size invariance: the same token sequence must produce
+identical output regardless of how tokens are batched.
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from vllm.entrypoints.openai.chat_completion.protocol import (
     ChatCompletionRequest,
 )
 from vllm.entrypoints.openai.engine.protocol import DeltaMessage
-from vllm.parser.engine.token_capture import accumulate_deltas
-
-DATA_DIR = Path(__file__).parent / "fixtures"
 
 
 @dataclass
@@ -46,42 +42,6 @@ class ParseOutput:
     reasoning: str = ""
     content: str = ""
     tool_calls: list[dict] = field(default_factory=list)
-
-
-def load_samples_from_path(path: Path) -> list[Sample]:
-    """Load all samples from a JSONL file."""
-    if not path.exists():
-        return []
-
-    samples = []
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        data = json.loads(line)
-        tokens = [(t[0], t[1]) for t in data["tokens"]]
-        expected = data.get("expected", {})
-        serving = data.get("serving", {})
-        samples.append(
-            Sample(
-                id=data["id"],
-                description=data.get("description", ""),
-                source=data.get("source", ""),
-                vocab=data.get("vocab", {}),
-                tokens=tokens,
-                expected_reasoning=expected.get("reasoning"),
-                expected_content=expected.get("content"),
-                expected_tool_calls=expected.get("tool_calls"),
-                tools=serving.get("tools"),
-                chat_template_kwargs=serving.get("chat_template_kwargs"),
-            )
-        )
-    return samples
-
-
-def load_samples(model: str) -> list[Sample]:
-    """Load all samples from ``tests/parser/engine/fixtures/{model}.jsonl``."""
-    return load_samples_from_path(DATA_DIR / f"{model}.jsonl")
 
 
 class MockTokenizer:
@@ -302,6 +262,46 @@ def replay_with_text_holdback(
         results.append(result)
 
     return results
+
+
+def accumulate_deltas(
+    deltas: Sequence[DeltaMessage | None],
+) -> dict:
+    reasoning_parts: list[str] = []
+    content_parts: list[str] = []
+    tool_calls_by_idx: dict[int, dict] = {}
+
+    for delta in deltas:
+        if delta is None:
+            continue
+        if delta.reasoning:
+            reasoning_parts.append(delta.reasoning)
+        if delta.content:
+            content_parts.append(delta.content)
+        if delta.tool_calls:
+            for tc in delta.tool_calls:
+                if tc.function and tc.function.name:
+                    existing = tool_calls_by_idx.get(tc.index)
+                    if existing is None:
+                        tool_calls_by_idx[tc.index] = {
+                            "name": tc.function.name,
+                            "_args_parts": [tc.function.arguments or ""],
+                        }
+                    else:
+                        existing["_args_parts"].append(tc.function.arguments or "")
+                elif tc.function and tc.function.arguments:
+                    existing = tool_calls_by_idx.get(tc.index)
+                    if existing is not None:
+                        existing["_args_parts"].append(tc.function.arguments)
+
+    return {
+        "reasoning": "".join(reasoning_parts),
+        "content": "".join(content_parts),
+        "tool_calls": [
+            {"name": tc["name"], "arguments": "".join(tc["_args_parts"])}
+            for tc in tool_calls_by_idx.values()
+        ],
+    }
 
 
 def collect_output(results: list[DeltaMessage | None]) -> ParseOutput:

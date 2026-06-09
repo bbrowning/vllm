@@ -18,11 +18,11 @@ from tests.parser.engine.replay_harness import (
     assert_no_terminal_leakage,
     assert_parse_output,
     collect_output,
-    load_samples,
     make_mock_tokenizer,
     replay_streaming,
     replay_with_text_holdback,
 )
+from tests.parser.engine.trace_builder import build_samples
 from vllm.parser.abstract_parser import Parser
 from vllm.parser.engine.registered_adapters import (
     DeepSeekV4Parser,
@@ -41,9 +41,10 @@ _ENGINE_PARSERS: dict[str, type[Parser]] = {
     "nemotron_v3_engine": NemotronV3Parser,
 }
 
-_gemma4_samples = load_samples("gemma4")
-_nemotron_v3_samples = load_samples("nemotron_v3")
-_qwen3_samples = load_samples("qwen3")
+_gemma4_samples = build_samples("gemma4")
+_nemotron_v3_samples = build_samples("nemotron_v3")
+_qwen3_samples = build_samples("qwen3")
+_deepseek_v4_samples = build_samples("deepseek_v4")
 
 _GEMMA4_TERMINALS = ["<|channel>", "<channel|>", "<|tool_call>", "<tool_call|>"]
 
@@ -203,38 +204,52 @@ class TestNemotronV3Replay:
         assert_no_terminal_leakage(output, _NEMOTRON_V3_TERMINALS)
 
 
-class TestNemotronV3StreamInterval19:
-    """Replay captured sample at stream_interval=19 with aligned text/tokens.
+_DSV4_TERMINALS = [
+    "<think>",
+    "</think>",
+]
 
-    These tests verify the parser works when ``skip_special_tokens=False``
-    is properly set (text and token IDs are aligned).
-    """
 
-    _target_id = "nemotron-v3-live-capture-git-diff-003"
+@pytest.mark.parametrize("chunk_size", NEMOTRON_CHUNK_SIZES, ids=lambda c: f"chunk{c}")
+@pytest.mark.parametrize("sample", _deepseek_v4_samples, ids=lambda s: s.id)
+class TestDeepSeekV4Replay:
+    """Replay DeepSeek V4 token sequences at different chunk sizes."""
 
-    def _get_sample(self):
-        for s in _nemotron_v3_samples:
-            if s.id == self._target_id:
-                return s
-        pytest.skip(f"sample {self._target_id!r} not found")
-
-    @pytest.mark.parametrize(
-        "chunk_size", [19, 20, 10, 5, 1], ids=lambda c: f"chunk{c}"
-    )
-    @pytest.mark.parametrize("finished", [False, True], ids=["no_finish", "finish"])
-    def test_tool_call_args_parsed(self, chunk_size, finished):
-        """Tool call must have non-empty command argument."""
-        sample = self._get_sample()
+    def test_replay(self, sample, chunk_size):
         tokenizer = make_mock_tokenizer(sample)
-        parser = NemotronV3Parser(tokenizer)
+        kwargs = {}
+        if sample.chat_template_kwargs:
+            kwargs["chat_template_kwargs"] = sample.chat_template_kwargs
+        parser = DeepSeekV4Parser(tokenizer, sample.tools, **kwargs)
         deltas = replay_streaming(
-            parser,
-            sample.tokens,
-            chunk_size=chunk_size,
-            finished_on_last=finished,
+            parser, sample.tokens, chunk_size=chunk_size, tools=sample.tools
         )
         output = collect_output(deltas)
+
         assert_parse_output(output, sample)
+        assert_no_terminal_leakage(output, _DSV4_TERMINALS)
+
+
+@pytest.mark.parametrize("delay", TEXT_HOLDBACK_DELAYS, ids=lambda d: f"delay{d}")
+@pytest.mark.parametrize("sample", _deepseek_v4_samples, ids=lambda s: s.id)
+class TestDeepSeekV4TextHoldback:
+    """Replay DeepSeek V4 with production-like text/token-ID misalignment."""
+
+    def test_replay(self, sample, delay):
+        tokenizer = make_mock_tokenizer(sample)
+        kwargs = {}
+        if sample.chat_template_kwargs:
+            kwargs["chat_template_kwargs"] = sample.chat_template_kwargs
+        parser = DeepSeekV4Parser(tokenizer, sample.tools, **kwargs)
+        deltas = replay_with_text_holdback(
+            parser, sample.tokens, text_delay=delay, tools=sample.tools
+        )
+        output = collect_output(deltas)
+
+        assert_parse_output(output, sample)
+        assert_no_terminal_leakage(
+            output, _DSV4_TERMINALS, context=f"text_delay={delay}"
+        )
 
 
 class TestNemotronV3DeferralFinish:
@@ -307,6 +322,11 @@ _TOOL_CALL_SAMPLES = (
         for s in _gemma4_samples
         if s.expected_tool_calls and s.expected_reasoning
     ]
+    + [
+        (DeepSeekV4Parser, s)
+        for s in _deepseek_v4_samples
+        if s.expected_tool_calls and s.expected_reasoning
+    ]
 )
 
 
@@ -360,7 +380,10 @@ class TestSkipToolParsingReplay:
 
     def test_replay(self, parser_cls, sample, chunk_size):
         tokenizer = make_mock_tokenizer(sample)
-        parser = parser_cls(tokenizer)
+        kwargs = {}
+        if sample.chat_template_kwargs:
+            kwargs["chat_template_kwargs"] = sample.chat_template_kwargs
+        parser = parser_cls(tokenizer, **kwargs)
 
         request = _test_request()
         request.tool_choice = "none"
