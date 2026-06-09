@@ -748,6 +748,7 @@ class ParserEngine(Parser):
         try:
             current_json = converter(slot.args, True)
         except Exception:
+            logger.debug("arg converter failed (streaming): %s", slot.args[:80])
             return None
 
         if not current_json:
@@ -785,6 +786,7 @@ class ParserEngine(Parser):
         try:
             final_json = converter(slot.args, False)
         except Exception:
+            logger.debug("arg converter failed (flush): %s", slot.args[:80])
             return None
 
         if final_json:
@@ -836,6 +838,9 @@ class ParserEngine(Parser):
                     try:
                         args_json = converter(raw_body, False)
                     except Exception:
+                        logger.debug(
+                            "arg converter failed (extract): %s", raw_body[:80]
+                        )
                         args_json = self._extract_args_json(raw_body, name)
                 else:
                     args_json = self._extract_args_json(raw_body, name)

@@ -1008,5 +1008,44 @@ class DelegatingParser(Parser):
 
         if finished:
             delta_message = self.finalize_generation(delta_message, request, state)
+            delta_message = self._flush_engine_parsers(delta_message)
 
+        return delta_message
+
+    def _flush_engine_parsers(
+        self, delta_message: DeltaMessage | None
+    ) -> DeltaMessage | None:
+        """Flush buffered state from engine-based parsers at stream end."""
+        reasoning_ended = self._stream_state.reasoning_ended
+        for parser in (self._reasoning_parser, self._tool_parser):
+            if not getattr(parser, "engine_based_streaming", False):
+                continue
+            # When reasoning has ended and we transitioned to the tool
+            # phase, the reasoning parser's engine may still have buffered
+            # characters from tool-call markup it saw with
+            # skip_tool_parsing=True.  Flushing that would leak spurious
+            # content (e.g. a stray '"'), so skip it.
+            if parser is self._reasoning_parser and reasoning_ended:
+                continue
+            finish = getattr(parser, "finish_streaming", None)
+            if finish is None:
+                continue
+            flush_delta = finish()
+            if flush_delta is None:
+                continue
+            if delta_message is None:
+                delta_message = flush_delta
+            else:
+                if flush_delta.content:
+                    delta_message.content = (
+                        delta_message.content or ""
+                    ) + flush_delta.content
+                if flush_delta.reasoning:
+                    delta_message.reasoning = (
+                        delta_message.reasoning or ""
+                    ) + flush_delta.reasoning
+                if flush_delta.tool_calls:
+                    delta_message.tool_calls = (
+                        delta_message.tool_calls or []
+                    ) + flush_delta.tool_calls
         return delta_message

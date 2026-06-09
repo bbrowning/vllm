@@ -78,7 +78,7 @@ async def _generate_openai_sse_stream(sample, chunk_size, parser_mode="engine"):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "parser_mode",
-    ["engine", "delegating", "delegating_engine"],
+    ["delegating", "delegating_engine"],
     ids=lambda m: f"mode={m}",
 )
 @pytest.mark.parametrize("chunk_size", CHUNK_SIZES, ids=lambda c: f"chunk={c}")

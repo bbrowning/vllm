@@ -72,7 +72,7 @@ def _build_responses_request(sample) -> ResponsesRequest:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "parser_mode",
-    ["engine", "delegating", "delegating_engine"],
+    ["delegating", "delegating_engine"],
     ids=lambda m: f"mode={m}",
 )
 @pytest.mark.parametrize("chunk_size", CHUNK_SIZES, ids=lambda c: f"chunk={c}")

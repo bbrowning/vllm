@@ -64,7 +64,6 @@ DELEGATING_OLD_XFAIL_SAMPLES: frozenset[str] = frozenset(
         "deepseek_v4-think-whitespace-tool",
         "deepseek_v4-whitespace-before-tool",
         "gemma4-complex-json-args",
-        "gemma4-content-only",
         "gemma4-empty-reasoning-content",
         "gemma4-think-content-tool",
         "gemma4-think-then-content",

@@ -8,12 +8,16 @@ DeltaMessage / ExtractedToolCallInformation protocol.
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 from tests.parser.engine.conftest import make_mock_tokenizer
 from vllm.entrypoints.openai.chat_completion.protocol import (
+    ChatCompletionRequest,
     ChatCompletionToolsParam,
 )
 from vllm.entrypoints.openai.engine.protocol import FunctionDefinition
+from vllm.parser.abstract_parser import DelegatingParser
+from vllm.parser.engine.adapters import make_adapters
 from vllm.parser.engine.events import EventType, SemanticEvent
 from vllm.parser.engine.parser_engine import ParserEngine
 from vllm.parser.engine.parser_engine_config import (
@@ -394,3 +398,74 @@ class TestExtractResponseOutputs:
         types = [o.type for o in outputs]
         assert "reasoning" in types
         assert "function_call" in types
+
+
+# ── TestAdapterFinishOnStreamEnd ────────────────────────────────────
+
+
+class _CombinedTestEngine(ParserEngine):
+    def __init__(self, tokenizer, tools=None, **kwargs):
+        super().__init__(
+            tokenizer, tools, parser_engine_config=_combined_config(), **kwargs
+        )
+
+
+_CombinedReasoningAdapter, _CombinedToolAdapter = make_adapters(_CombinedTestEngine)
+
+
+class _CombinedDelegating(DelegatingParser):
+    reasoning_parser_cls = _CombinedReasoningAdapter
+    tool_parser_cls = _CombinedToolAdapter
+
+
+def _make_delegating_request():
+    req = MagicMock(spec=ChatCompletionRequest)
+    req.tools = []
+    req.tool_choice = "auto"
+    return req
+
+
+class TestAdapterFinishOnStreamEnd:
+    """Engine adapters must flush buffered text when streaming ends.
+
+    When a DelegatingParser wraps engine adapters, the underlying
+    StreamingParserEngine.finish() must be called on the last
+    parse_delta(finished=True) so that lexer-buffered text (terminal
+    prefixes) and scanner-deferred terminals are not silently lost.
+    """
+
+    def test_lexer_buffer_flushed_on_finished(self):
+        """Text buffered as a potential terminal prefix must be emitted
+        as content when the stream ends."""
+        tokenizer = make_mock_tokenizer(_VOCAB)
+        parser = _CombinedDelegating(tokenizer)
+        request = _make_delegating_request()
+
+        # Feed reasoning then content with a trailing '<' that looks like
+        # the start of a terminal ('<think>' or '<tool_call>').
+        parser.parse_delta("</think>", [201], request, finished=False)
+        delta = parser.parse_delta("Hello world<", [], request, finished=True)
+        # The '<' must NOT be silently dropped.
+        assert delta is not None
+        assert delta.content is not None
+        assert "<" in delta.content, (
+            "Trailing '<' lost: lexer buffer was not flushed on finish"
+        )
+
+    def test_args_buffer_flushed_on_finished(self):
+        """Pending arg buffer text must be emitted when stream ends
+        mid-tool-call (closing brace held back in buffer)."""
+        tokenizer = make_mock_tokenizer(_VOCAB)
+        parser = _CombinedDelegating(tokenizer)
+        request = _make_delegating_request()
+
+        parser.parse_delta("</think>", [201], request, finished=False)
+        parser.parse_delta("<tool_call>", [202], request, finished=False)
+        parser.parse_delta('{"name": "f"}', [], request, finished=False)
+        # The closing } is held back in args buffer, waiting for
+        # a TOOL_END terminal. Stream ends without one — finish()
+        # must flush the buffer.
+        delta = parser.parse_delta("", [], request, finished=True)
+        assert delta is not None, (
+            "Engine finish should produce a delta with flushed args/end"
+        )

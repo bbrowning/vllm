@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
+from vllm.parser.engine.parser_engine_config import ParserState
 from vllm.reasoning.abs_reasoning_parsers import ReasoningParser
 from vllm.tool_parsers.abstract_tool_parser import ToolParser
 
@@ -28,6 +29,13 @@ if TYPE_CHECKING:
     from vllm.parser.engine.parser_engine import ParserEngine
     from vllm.tokenizers import TokenizerLike
     from vllm.tool_parsers.utils import Tool
+
+
+def _finish_engine_streaming(adapter) -> DeltaMessage | None:
+    """Flush a parser engine adapter's buffered state at stream end."""
+    engine = adapter._parser_engine
+    events = engine._engine.finish()
+    return engine._events_to_delta(events) if events else None
 
 
 class ParserEngineReasoningAdapter(ReasoningParser):
@@ -101,6 +109,9 @@ class ParserEngineReasoningAdapter(ReasoningParser):
     def has_reasoning_ended(self) -> bool | None:
         return self._parser_engine._reasoning_ended
 
+    def finish_streaming(self) -> DeltaMessage | None:
+        return _finish_engine_streaming(self)
+
     def count_reasoning_tokens(self, token_ids: Sequence[int]) -> int:
         return self._parser_engine.count_reasoning_tokens(token_ids)
 
@@ -153,7 +164,11 @@ class ParserEngineToolAdapter(ToolParser):
         delta_token_ids: Sequence[int],
         request: ChatCompletionRequest,
     ) -> DeltaMessage | None:
-        return self._parser_engine.extract_tool_calls_streaming(
+        engine = self._parser_engine
+        if not engine._streaming_initialized:
+            engine._streaming_initialized = True
+            engine._reset(initial_state=ParserState.CONTENT)
+        return engine.extract_tool_calls_streaming(
             previous_text,
             current_text,
             delta_text,
@@ -162,6 +177,9 @@ class ParserEngineToolAdapter(ToolParser):
             delta_token_ids,
             request,
         )
+
+    def finish_streaming(self) -> DeltaMessage | None:
+        return _finish_engine_streaming(self)
 
 
 def make_adapters(

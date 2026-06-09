@@ -13,6 +13,7 @@ real parser before being returned.
 
 from __future__ import annotations
 
+import functools
 import json
 from dataclasses import dataclass
 from typing import Any
@@ -226,6 +227,16 @@ def _tool_defs(tool_calls: list[ToolCallSpec]) -> list[dict]:
 # ── Format handlers ──────────────────────────────────────────────────
 
 
+def _expected_tc(scenario: Scenario) -> list[dict] | None:
+    if not scenario.tool_calls:
+        return None
+    return [{"name": tc.name, "arguments": tc.arguments} for tc in scenario.tool_calls]
+
+
+def _expected_tools(scenario: Scenario) -> list[dict] | None:
+    return _tool_defs(scenario.tool_calls) if scenario.tool_calls else None
+
+
 def _validate_sample(sample: Sample, parser_cls: type, **kwargs) -> None:
     """Replay sample through the real parser and assert correctness."""
     tokenizer = MockTokenizer(vocab=dict(sample.vocab), tokens=sample.tokens)
@@ -333,12 +344,6 @@ def _build_qwen3(
     else:
         expected_reasoning = ""
 
-    expected_tc = (
-        [{"name": tc.name, "arguments": tc.arguments} for tc in scenario.tool_calls]
-        if scenario.tool_calls
-        else None
-    )
-
     sample = _make_sample(
         sample_id=f"{name}-{scenario.id}",
         description=scenario.description,
@@ -346,8 +351,8 @@ def _build_qwen3(
         segments=_qwen3_segments(scenario),
         expected_reasoning=expected_reasoning,
         expected_content=_qwen3_expected_content(scenario),
-        expected_tool_calls=expected_tc,
-        tools=_tool_defs(scenario.tool_calls) if scenario.tool_calls else None,
+        expected_tool_calls=_expected_tc(scenario),
+        tools=_expected_tools(scenario),
     )
     if validate:
         _validate_sample(sample, parser_cls)
@@ -372,6 +377,8 @@ _GEMMA4_VOCAB: dict[str, int] = {
     "<|tool_call>": 48,
     "<tool_call|>": 49,
     '<|"|>': 52,
+    "<|turn>": 53,
+    "<|tool_response>": 54,
 }
 _GEMMA4_THOUGHT_PREFIX = "thought\n"
 _GEMMA4_QUOTE = '<|"|>'
@@ -437,12 +444,6 @@ def _gemma4_segments(scenario: Scenario) -> list[tuple[str, bool]]:
 
 
 def _build_gemma4(scenario: Scenario, validate: bool = True) -> Sample:
-    expected_tc = (
-        [{"name": tc.name, "arguments": tc.arguments} for tc in scenario.tool_calls]
-        if scenario.tool_calls
-        else None
-    )
-
     sample = _make_sample(
         sample_id=f"gemma4-{scenario.id}",
         description=scenario.description,
@@ -450,8 +451,8 @@ def _build_gemma4(scenario: Scenario, validate: bool = True) -> Sample:
         segments=_gemma4_segments(scenario),
         expected_reasoning=scenario.reasoning,
         expected_content=_qwen3_expected_content(scenario),
-        expected_tool_calls=expected_tc,
-        tools=_tool_defs(scenario.tool_calls) if scenario.tool_calls else None,
+        expected_tool_calls=_expected_tc(scenario),
+        tools=_expected_tools(scenario),
     )
     if validate:
         _validate_sample(sample, Gemma4Parser)
@@ -469,18 +470,19 @@ _DSML = "｜DSML｜"  # ｜DSML｜
 
 def _dsv4_param_text(key: str, value: Any) -> str:
     """Render one DSML parameter tag."""
-    if isinstance(value, str):
-        return (
-            f'<{_DSML}parameter name="{key}" string="true">{value}</{_DSML}parameter>\n'
-        )
-    if isinstance(value, bool):
+    is_string = isinstance(value, str)
+    if is_string:
+        val_str = value
+    elif isinstance(value, bool):
         val_str = "true" if value else "false"
     elif isinstance(value, (int, float)):
         val_str = str(value)
     else:
         val_str = json.dumps(value, ensure_ascii=False)
+    string_attr = "true" if is_string else "false"
     return (
-        f'<{_DSML}parameter name="{key}" string="false">{val_str}</{_DSML}parameter>\n'
+        f'<{_DSML}parameter name="{key}" string="{string_attr}">'
+        f"{val_str}</{_DSML}parameter>\n"
     )
 
 
@@ -528,12 +530,6 @@ def _build_deepseek_v4(scenario: Scenario, validate: bool = True) -> Sample:
     else:
         expected_reasoning = None
 
-    expected_tc = (
-        [{"name": tc.name, "arguments": tc.arguments} for tc in scenario.tool_calls]
-        if scenario.tool_calls
-        else None
-    )
-
     sample = _make_sample(
         sample_id=f"deepseek_v4-{scenario.id}",
         description=scenario.description,
@@ -541,8 +537,8 @@ def _build_deepseek_v4(scenario: Scenario, validate: bool = True) -> Sample:
         segments=_dsv4_segments(scenario, thinking),
         expected_reasoning=expected_reasoning,
         expected_content=_qwen3_expected_content(scenario),
-        expected_tool_calls=expected_tc,
-        tools=_tool_defs(scenario.tool_calls) if scenario.tool_calls else None,
+        expected_tool_calls=_expected_tc(scenario),
+        tools=_expected_tools(scenario),
         chat_template_kwargs=chat_kwargs,
     )
     if validate:
@@ -563,10 +559,11 @@ _BUILDERS: dict[str, Any] = {
 }
 
 
-def build_samples(model: str) -> list[Sample]:
+@functools.cache
+def build_samples(model: str) -> tuple[Sample, ...]:
     """Build all scenario samples for a model, self-validated."""
     builder = _BUILDERS[model]
-    return [builder(s) for s in SCENARIOS]
+    return tuple(builder(s) for s in SCENARIOS)
 
 
 def build_sample(model: str, scenario: Scenario) -> Sample:
