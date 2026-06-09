@@ -227,8 +227,6 @@ class TokenIDScanner:
             return [TextChunk(delta_text)]
 
         reconstructed = self._join_decoded_text(results)
-        if reconstructed is None:
-            return results  # non-string text, return as-is
 
         if not reconstructed:
             return [TextChunk(delta_text)] + results
@@ -243,19 +241,11 @@ class TokenIDScanner:
         # Rebuild from delta_text using PreLexedTerminals as split anchors.
         return self._rebuild_from_anchors(delta_text, results)
 
-    def _join_decoded_text(self, results: list[LexerInput]) -> str | None:
-        """Join TextChunk and PreLexedTerminal text into one string.
-
-        Returns ``None`` if any PreLexedTerminal has a non-string text
-        field (indicating unreliable decode).
-        """
+    def _join_decoded_text(self, results: list[LexerInput]) -> str:
+        """Join TextChunk and PreLexedTerminal text into one string."""
         parts: list[str] = []
         for item in results:
-            if isinstance(item, TextChunk):
-                parts.append(item.text)
-            elif isinstance(item, PreLexedTerminal):
-                if not isinstance(item.text, str):
-                    return None
+            if isinstance(item, (TextChunk, PreLexedTerminal)):
                 parts.append(item.text)
         return "".join(parts)
 

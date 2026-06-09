@@ -53,6 +53,34 @@ def scanner(tokenizer):
     )
 
 
+class TestJoinDecodedTextReturnsStr:
+    """_join_decoded_text now returns str unconditionally (was
+    str | None when an isinstance guard made a branch unreachable)."""
+
+    @pytest.fixture
+    def bare_scanner(self):
+        return TokenIDScanner({}, tokenizer=None, drop_token_ids=set())
+
+    def test_mixed_items(self, bare_scanner):
+        items = [
+            TextChunk("hello "),
+            PreLexedTerminal("TOOL_START", 42, "<tool_call>"),
+            TextChunk(" world"),
+        ]
+        result = bare_scanner._join_decoded_text(items)
+        assert isinstance(result, str)
+        assert result == "hello <tool_call> world"
+
+    def test_empty_list(self, bare_scanner):
+        result = bare_scanner._join_decoded_text([])
+        assert isinstance(result, str)
+        assert result == ""
+
+    def test_only_text_chunks(self, bare_scanner):
+        result = bare_scanner._join_decoded_text([TextChunk("abc"), TextChunk("def")])
+        assert result == "abcdef"
+
+
 class TestHoldbackTextRecovery:
     def test_holdback_text_with_special_token_text_absent(self, scanner):
         """delta_text has hold-back text but the special token's text is

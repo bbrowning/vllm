@@ -30,6 +30,9 @@ from vllm.parser.engine.streaming_parser_engine import StreamingParserEngine
 from vllm.tool_parsers.utils import extract_types_from_schema, find_tool_properties
 
 if TYPE_CHECKING:
+    from openai.types.responses.response_output_item import ResponseOutputItem
+    from openai.types.responses.response_output_text import Logprob
+
     from vllm.entrypoints.openai.chat_completion.protocol import (
         ChatCompletionRequest,
     )
@@ -383,9 +386,6 @@ class ParserEngine(Parser):
             for i in range(len(input_ids) - 1, -1, -1):
                 if input_ids[i] == end_id:
                     return input_ids[i + 1 :]
-            return input_ids
-        if self._reasoning_ended:
-            return []
         return input_ids
 
     def count_reasoning_tokens(self, token_ids: Sequence[int]) -> int:
@@ -476,14 +476,13 @@ class ParserEngine(Parser):
         request: ResponsesRequest,
         enable_auto_tools: bool = False,
         tool_call_id_type: str = "random",
-        logprobs=None,
-    ) -> list:
+        logprobs: list[Logprob] | None = None,
+    ) -> list[ResponseOutputItem]:
         from openai.types.responses import (
             ResponseFunctionToolCall,
             ResponseOutputMessage,
             ResponseOutputText,
         )
-        from openai.types.responses.response_output_item import ResponseOutputItem
         from openai.types.responses.response_reasoning_item import (
             Content as ResponseReasoningTextContent,
         )
@@ -909,8 +908,6 @@ class ParserEngine(Parser):
         try:
             parsed = json.loads(raw_args)
         except json.JSONDecodeError:
-            if self.parser_engine_config.value_postprocessor:
-                return self.parser_engine_config.value_postprocessor(raw_args)
             return raw_args
 
         if isinstance(parsed, dict):

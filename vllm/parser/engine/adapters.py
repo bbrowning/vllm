@@ -134,9 +134,10 @@ class ParserEngineToolAdapter(ToolParser):
         self,
         tokenizer: TokenizerLike,
         tools: list[Tool] | None = None,
+        **kwargs,
     ) -> None:
         super().__init__(tokenizer, tools)
-        self._parser_engine = self._parser_engine_cls(tokenizer, tools)  # type: ignore[call-arg]
+        self._parser_engine = self._parser_engine_cls(tokenizer, tools, **kwargs)  # type: ignore[call-arg]
 
     def adjust_request(
         self,

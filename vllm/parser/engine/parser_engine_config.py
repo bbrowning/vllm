@@ -81,8 +81,6 @@ class ParserEngineConfig:
 
     initial_state: ParserState = ParserState.CONTENT
 
-    value_postprocessor: Callable[[str], str] | None = None
-
     arg_converter: Callable[[str, bool], str] | None = None
 
     strip_trailing_quotes: bool = True

@@ -10,6 +10,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+
 from tests.parser.engine.conftest import make_mock_tokenizer
 from vllm.entrypoints.openai.chat_completion.protocol import (
     ChatCompletionRequest,
@@ -469,3 +471,68 @@ class TestAdapterFinishOnStreamEnd:
         assert delta is not None, (
             "Engine finish should produce a delta with flushed args/end"
         )
+
+
+# ── TestToolAdapterForwardsKwargs ──────────────────────────────────
+
+
+class TestToolAdapterForwardsKwargs:
+    """ParserEngineToolAdapter.__init__ must forward **kwargs to the
+    parser engine class so chat_template_kwargs reach model parsers."""
+
+    @pytest.mark.parametrize(
+        "enable_thinking,expected_state",
+        [
+            (False, ParserState.CONTENT),
+            (True, ParserState.REASONING),
+        ],
+    )
+    def test_kwargs_forwarded_to_parser_engine(self, enable_thinking, expected_state):
+        from vllm.parser.deepseek_v4 import DeepSeekV4Parser
+
+        vocab = {"<think>": 100, "</think>": 101}
+        tokenizer = make_mock_tokenizer(vocab)
+
+        _, ToolAdapter = make_adapters(DeepSeekV4Parser)
+        adapter = ToolAdapter(
+            tokenizer,
+            tools=None,
+            chat_template_kwargs={"enable_thinking": enable_thinking},
+        )
+        engine = adapter._parser_engine
+        assert engine.parser_engine_config.initial_state == expected_state
+
+
+# ── TestExtractContentIdsNoEmptyReturn ─────────────────────────────
+
+
+class TestExtractContentIdsNoEmptyReturn:
+    """extract_content_ids must return input_ids (not []) when there is
+    no THINK_END token ID and _reasoning_ended is True."""
+
+    _NO_THINK_CONFIG = ParserEngineConfig(name="no_think_end", token_id_terminals={})
+
+    @pytest.mark.parametrize("input_ids", [[1, 2, 3], []])
+    def test_returns_input_ids_without_think_end(self, input_ids):
+        engine = _make_engine(self._NO_THINK_CONFIG)
+        assert engine._reasoning_end_token_id is None
+        engine._reasoning_ended = True
+        assert engine.extract_content_ids(input_ids) == input_ids
+
+
+# ── TestValuePostprocessorRemoved ──────────────────────────────────
+
+
+class TestValuePostprocessorRemoved:
+    """ParserEngineConfig no longer has a value_postprocessor field."""
+
+    def test_no_value_postprocessor_field(self):
+        config = ParserEngineConfig(name="test")
+        assert not hasattr(config, "value_postprocessor")
+
+    def test_constructor_rejects_value_postprocessor(self):
+        with pytest.raises(TypeError):
+            ParserEngineConfig(
+                name="test",
+                value_postprocessor=lambda x: x,  # type: ignore[call-arg]
+            )

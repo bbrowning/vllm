@@ -16,7 +16,6 @@ CONTENT_TERMINAL = "__CONTENT__"
 class TerminalDef:
     name: str
     pattern: re.Pattern[str]
-    priority: int = 0
     is_literal: bool = False
     literal: str = ""
 
@@ -37,7 +36,6 @@ class LexerShape:
     __slots__ = (
         "terminals",
         "literal_strings",
-        "regex_terminals",
         "max_literal_len",
         "literal_first_chars",
         "has_only_literals",
@@ -48,18 +46,14 @@ class LexerShape:
     def __init__(self, terminals: list[TerminalDef]) -> None:
         self.terminals = sorted(
             terminals,
-            key=lambda t: (not t.is_literal, -t.priority, -len(t.pattern.pattern)),
+            key=lambda t: (not t.is_literal, -len(t.pattern.pattern)),
         )
         literal_strings: list[tuple[str, str]] = []
-        regex_terminals: list[TerminalDef] = []
         for t in self.terminals:
             if t.is_literal:
                 literal_strings.append((t.literal, t.name))
-            else:
-                regex_terminals.append(t)
 
         self.literal_strings = literal_strings
-        self.regex_terminals = regex_terminals
         max_len = 0
         for lit, _ in literal_strings:
             if len(lit) > max_len:
@@ -68,7 +62,7 @@ class LexerShape:
         self.literal_first_chars = frozenset(
             lit[0] for lit, _ in literal_strings if lit
         )
-        self.has_only_literals = not regex_terminals
+        self.has_only_literals = all(t.is_literal for t in terminals)
 
         prefix_set: set[str] = set()
         for lit, _ in literal_strings:
@@ -112,7 +106,6 @@ class IncrementalLexer:
         self.buffer = ""
 
         self._literal_strings = shape.literal_strings
-        self._regex_terminals = shape.regex_terminals
         self._max_literal_len = shape.max_literal_len
         self._literal_first_chars = shape.literal_first_chars
         self._has_only_literals = shape.has_only_literals
@@ -142,7 +135,6 @@ class IncrementalLexer:
     def _drain(self) -> list[LexToken]:
         tokens: list[LexToken] = []
         first_chars = self._literal_first_chars
-        regex_terminals = self._regex_terminals
         content_terminal = self.content_terminal
         has_only_literals = self._has_only_literals
         literals_by_first = self._literals_by_first
@@ -168,13 +160,6 @@ class IncrementalLexer:
                     best_match is None or len(lit) > best_match[2]
                 ):
                     best_match = (name, lit, len(lit))
-
-            for tdef in regex_terminals:
-                m = tdef.pattern.match(self.buffer)
-                if m and m.start() == 0:
-                    matched = m.group()
-                    if best_match is None or len(matched) > best_match[2]:
-                        best_match = (tdef.name, matched, len(matched))
 
             if self.buffer in prefix_set:
                 if best_match is not None:

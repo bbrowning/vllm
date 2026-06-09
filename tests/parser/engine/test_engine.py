@@ -5,6 +5,11 @@
 from unittest.mock import MagicMock
 
 from vllm.parser.engine.events import EventType, SemanticEvent
+from vllm.parser.engine.incremental_lexer import (
+    LexerShape,
+    TerminalDef,
+    terminals_from_literals,
+)
 from vllm.parser.engine.parser_engine_config import (
     ParserEngineConfig,
     ParserState,
@@ -407,6 +412,175 @@ class TestTokenIdFiltering:
 
         assert sum(1 for e in all_events if e.type == EventType.TOOL_CALL_START) == 1
         assert sum(1 for e in all_events if e.type == EventType.TOOL_CALL_END) == 1
+
+
+class TestNoUnusedTokenizerAttr:
+    """StreamingParserEngine no longer stores a redundant _tokenizer."""
+
+    def test_no_tokenizer_attribute(self):
+        config = ParserEngineConfig(name="test")
+        engine = StreamingParserEngine(config, tokenizer=None)
+        assert not hasattr(engine, "_tokenizer")
+
+
+class TestArgsResetOnReentry:
+    """When leaving TOOL_ARGS and later re-entering (e.g. two tool
+    calls), the entering-TOOL_ARGS block resets args tracking.  The
+    redundant reset on exit was removed."""
+
+    @staticmethod
+    def _multi_tool_config() -> ParserEngineConfig:
+        return ParserEngineConfig(
+            name="multi_tool",
+            terminals={
+                "TOOL_START": "<tool_call>",
+                "TOOL_END": "</tool_call>",
+                "TOOL_SEP": "<tool_sep>",
+            },
+            transitions={
+                (ParserState.CONTENT, "TOOL_START"): Transition(
+                    ParserState.TOOL_ARGS,
+                    [EventType.TOOL_CALL_START],
+                ),
+                (ParserState.TOOL_ARGS, "TOOL_END"): Transition(
+                    ParserState.TOOL_BETWEEN,
+                    [EventType.TOOL_CALL_END],
+                ),
+                (ParserState.TOOL_BETWEEN, "TOOL_SEP"): Transition(
+                    ParserState.TOOL_ARGS,
+                    [EventType.TOOL_CALL_START],
+                ),
+            },
+            content_events={
+                ParserState.CONTENT: EventType.TEXT_CHUNK,
+                ParserState.TOOL_ARGS: EventType.ARG_VALUE_CHUNK,
+            },
+        )
+
+    def test_args_tracking_across_reentry(self):
+        engine = StreamingParserEngine(self._multi_tool_config(), tokenizer=None)
+
+        events = engine.feed(
+            '<tool_call>{"city": "SF"}</tool_call>'
+            "<tool_sep>"
+            '{"name": "bar"}</tool_call>',
+            [],
+        )
+
+        tool_starts = [e for e in events if e.type == EventType.TOOL_CALL_START]
+        tool_ends = [e for e in events if e.type == EventType.TOOL_CALL_END]
+        arg_chunks = [e for e in events if e.type == EventType.ARG_VALUE_CHUNK]
+
+        assert len(tool_starts) == 2
+        assert len(tool_ends) == 2
+        assert tool_starts[0].tool_index == 0
+        assert tool_starts[1].tool_index == 1
+
+        first_args = "".join(e.value for e in arg_chunks if e.tool_index == 0)
+        second_args = "".join(e.value for e in arg_chunks if e.tool_index == 1)
+        assert '"city"' in first_args
+        assert '"name"' in second_args
+
+    def test_brace_depth_resets_on_reentry(self):
+        """Verify _args_brace_depth resets when re-entering TOOL_ARGS."""
+        engine = StreamingParserEngine(self._multi_tool_config(), tokenizer=None)
+        engine.feed("<tool_call>", [])
+        assert engine.state == ParserState.TOOL_ARGS
+        assert engine._args_brace_depth == 0
+
+        engine.feed('{"a": 1}', [])
+        engine.feed("</tool_call>", [])
+        assert engine.state == ParserState.TOOL_BETWEEN
+
+        engine.feed("<tool_sep>", [])
+        assert engine.state == ParserState.TOOL_ARGS
+        assert engine._args_brace_depth == 0
+        assert engine._args_in_string is False
+        assert engine._args_escape_next is False
+
+
+class TestToolPreambleFinish:
+    """finish() in TOOL_PREAMBLE state emits TOOL_CALL_END when a tool
+    call was started (tool_index >= 0), but not when tool_index is -1."""
+
+    @staticmethod
+    def _preamble_with_tool_call_start_config() -> ParserEngineConfig:
+        return ParserEngineConfig(
+            name="preamble_tcs",
+            terminals={"TOOL_START": "<tool_call>"},
+            transitions={
+                (ParserState.CONTENT, "TOOL_START"): Transition(
+                    ParserState.TOOL_PREAMBLE,
+                    [EventType.TOOL_CALL_START],
+                ),
+            },
+            content_events={ParserState.CONTENT: EventType.TEXT_CHUNK},
+        )
+
+    @staticmethod
+    def _preamble_without_tool_call_start_config() -> ParserEngineConfig:
+        return ParserEngineConfig(
+            name="preamble_no_tcs",
+            terminals={"TOOL_CALLS_START": "<tool_calls>"},
+            transitions={
+                (ParserState.CONTENT, "TOOL_CALLS_START"): Transition(
+                    ParserState.TOOL_PREAMBLE,
+                    [],
+                ),
+            },
+            content_events={ParserState.CONTENT: EventType.TEXT_CHUNK},
+        )
+
+    def test_finish_emits_tool_call_end_with_tool_index(self):
+        config = self._preamble_with_tool_call_start_config()
+        engine = StreamingParserEngine(config, tokenizer=None)
+
+        engine.feed("<tool_call>", [])
+        assert engine.state == ParserState.TOOL_PREAMBLE
+        assert engine.tool_index == 0
+
+        finish_events = engine.finish()
+        end_events = [e for e in finish_events if e.type == EventType.TOOL_CALL_END]
+        assert len(end_events) == 1
+        assert end_events[0].tool_index == 0
+
+    def test_finish_no_tool_call_end_without_tool_index(self):
+        config = self._preamble_without_tool_call_start_config()
+        engine = StreamingParserEngine(config, tokenizer=None)
+
+        engine.feed("<tool_calls>", [])
+        assert engine.state == ParserState.TOOL_PREAMBLE
+        assert engine.tool_index == -1
+
+        finish_events = engine.finish()
+        end_events = [e for e in finish_events if e.type == EventType.TOOL_CALL_END]
+        assert len(end_events) == 0
+        assert engine.state == ParserState.CONTENT
+
+
+class TestRegexTerminalInfraRemoved:
+    """TerminalDef.priority, LexerShape.regex_terminals, and the regex
+    matching loop were removed."""
+
+    def test_terminal_def_no_priority(self):
+        import regex as re
+
+        td = TerminalDef(name="X", pattern=re.compile("x"))
+        assert not hasattr(td, "priority")
+
+    def test_lexer_shape_no_regex_terminals(self):
+        shape = LexerShape([])
+        assert not hasattr(shape, "regex_terminals")
+
+    def test_terminals_from_literals_still_works(self):
+        literals = {"TOOL_START": "<tool_call>", "TOOL_END": "</tool_call>"}
+        defs = terminals_from_literals(literals)
+        assert len(defs) == 2
+        names = {d.name for d in defs}
+        assert names == {"TOOL_START", "TOOL_END"}
+        for d in defs:
+            assert d.is_literal
+            assert d.literal in ("<tool_call>", "</tool_call>")
 
 
 class TestMultiCharTerminalInArgs:

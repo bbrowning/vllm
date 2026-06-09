@@ -85,7 +85,6 @@ class StreamingParserEngine:
 
         self._resolved_token_ids = resolved_token_ids
         self._drop_token_ids = drop_token_ids
-        self._tokenizer = tokenizer
 
         self._scanner = TokenIDScanner(
             resolved_token_ids,
@@ -199,18 +198,18 @@ class StreamingParserEngine:
             self._args_safe_end = 0
 
         if self.state in (
+            ParserState.TOOL_PREAMBLE,
             ParserState.TOOL_ARGS,
             ParserState.TOOL_NAME,
             ParserState.TOOL_BETWEEN,
         ):
-            events.append(
-                SemanticEvent(
-                    EventType.TOOL_CALL_END,
-                    tool_index=self.tool_index,
+            if self.tool_index >= 0:
+                events.append(
+                    SemanticEvent(
+                        EventType.TOOL_CALL_END,
+                        tool_index=self.tool_index,
+                    )
                 )
-            )
-            self.state = ParserState.CONTENT
-        elif self.state == ParserState.TOOL_PREAMBLE:
             self.state = ParserState.CONTENT
         elif self.state == ParserState.REASONING:
             events.append(
@@ -307,20 +306,16 @@ class StreamingParserEngine:
         if (
             self.state == ParserState.TOOL_ARGS
             and transition.next_state != ParserState.TOOL_ARGS
+            and self._args_buffer
         ):
-            if self._args_buffer:
-                events.append(
-                    SemanticEvent(
-                        EventType.ARG_VALUE_CHUNK,
-                        value=self._args_buffer,
-                        tool_index=self.tool_index,
-                    )
+            events.append(
+                SemanticEvent(
+                    EventType.ARG_VALUE_CHUNK,
+                    value=self._args_buffer,
+                    tool_index=self.tool_index,
                 )
-                self._args_buffer = ""
-                self._args_safe_end = 0
-            self._args_brace_depth = 0
-            self._args_in_string = False
-            self._args_escape_next = False
+            )
+            self._args_buffer = ""
 
         self.state = transition.next_state
 
