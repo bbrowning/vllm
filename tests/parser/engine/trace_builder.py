@@ -25,6 +25,9 @@ from tests.parser.engine.replay_harness import (
     collect_output,
     replay_streaming,
 )
+from vllm.entrypoints.openai.chat_completion.protocol import (
+    ChatCompletionToolsParam,
+)
 from vllm.parser.engine.registered_adapters import (
     DeepSeekV4Parser,
     Gemma4Parser,
@@ -246,6 +249,14 @@ def _validate_sample(sample: Sample, parser_cls: type, **kwargs) -> None:
     assert_parse_output(output, sample)
 
 
+def _validate_tools(
+    tools: list[dict] | None,
+) -> list[ChatCompletionToolsParam] | None:
+    if not tools:
+        return None
+    return [ChatCompletionToolsParam.model_validate(t) for t in tools]
+
+
 def _make_sample(
     sample_id: str,
     description: str,
@@ -267,7 +278,7 @@ def _make_sample(
         expected_reasoning=expected_reasoning,
         expected_content=expected_content,
         expected_tool_calls=expected_tool_calls,
-        tools=tools,
+        tools=_validate_tools(tools),
         chat_template_kwargs=chat_template_kwargs,
     )
 
