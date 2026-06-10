@@ -54,16 +54,15 @@ _QWEN3XML_CONFIG = dict(
 )
 
 
-_DUP_ID = "old parser emits duplicate tool call IDs during streaming"
 _OLD_STREAMING_XFAILS = {
-    "test_single_tool_call_simple_args": _DUP_ID,
-    "test_parallel_tool_calls": _DUP_ID,
-    "test_various_data_types": _DUP_ID,
-    "test_empty_arguments": _DUP_ID,
-    "test_surrounding_text": _DUP_ID,
-    "test_escaped_strings": _DUP_ID,
+    "test_single_tool_call_simple_args": ("Qwen3XML streaming has systematic issues"),
+    "test_parallel_tool_calls": "Qwen3XML streaming has systematic issues",
+    "test_various_data_types": "Qwen3XML streaming has systematic issues",
+    "test_empty_arguments": "Qwen3XML streaming has systematic issues",
+    "test_surrounding_text": "Qwen3XML streaming has systematic issues",
+    "test_escaped_strings": "Qwen3XML streaming has systematic issues",
     "test_streaming_reconstruction": (
-        "old parser streaming produces inconsistent output"
+        "Qwen3XML streaming reconstruction has known issues"
     ),
 }
 
