@@ -22,16 +22,26 @@ from vllm.tool_parsers.gemma4_tool_parser import (
 
 TOOL_CALL_START_ID = 48
 TOOL_CALL_END_ID = 49
+CHANNEL_START = "<|channel>"
+CHANNEL_END = "<channel|>"
+CHANNEL_START_ID = 50
+CHANNEL_END_ID = 51
 
 
 @pytest.fixture
 def mock_tokenizer():
-    tokenizer = MagicMock()
-    tokenizer.encode.return_value = [1, 2, 3]
-    tokenizer.get_vocab.return_value = {
+    vocab = {
         TOOL_CALL_START: TOOL_CALL_START_ID,
         TOOL_CALL_END: TOOL_CALL_END_ID,
+        CHANNEL_START: CHANNEL_START_ID,
+        CHANNEL_END: CHANNEL_END_ID,
     }
+    decode_map = {v: k for k, v in vocab.items()}
+
+    tokenizer = MagicMock()
+    tokenizer.encode.return_value = [1, 2, 3]
+    tokenizer.get_vocab.return_value = vocab
+    tokenizer.decode.side_effect = lambda ids: decode_map.get(ids[0], f"tok{ids[0]}")
     return tokenizer
 
 
