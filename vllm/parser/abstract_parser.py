@@ -937,7 +937,7 @@ class DelegatingParser(Parser):
             )
             if not reasoning_end and processed is True:
                 reasoning_end = True
-            if self._tool_parser and reasoning_end and processed is not False:
+            if reasoning_end and processed is not False:
                 state.reasoning_ended = True
                 current_token_ids = self.extract_content_ids(delta_token_ids)
                 if self._engine_based:
@@ -954,6 +954,7 @@ class DelegatingParser(Parser):
                         if delta_message and delta_message.content
                         else ""
                     )
+                    delta_text = current_text
 
         # Tool call extraction
         if self._in_tool_call_phase(state):
