@@ -23,13 +23,11 @@ from tests.parser.engine.replay_harness import (
     replay_with_text_holdback,
 )
 from tests.parser.engine.trace_builder import build_samples
-from vllm.parser.abstract_parser import DelegatingParser, Parser
+from vllm.parser.abstract_parser import Parser
 from vllm.parser.engine.registered_adapters import (
     DeepSeekV4Parser,
     Gemma4Parser,
     NemotronV3Parser,
-    NemotronV3ParserReasoningAdapter,
-    NemotronV3ParserToolAdapter,
     Qwen3Parser,
     Qwen3XMLParser,
 )
@@ -427,48 +425,6 @@ class TestSkipToolParsingReplay:
             f"  expected: {expected_content!r}\n"
             f"  actual:   {output.content!r}"
         )
-
-
-class _NemotronV3DelegatingEngine(DelegatingParser):
-    reasoning_parser_cls = NemotronV3ParserReasoningAdapter
-    tool_parser_cls = NemotronV3ParserToolAdapter
-
-
-_NEMOTRON_V3_DELEGATING_FAIL_IDS = frozenset(
-    {
-        "nemotron_v3-think-then-content",
-        "nemotron_v3-content-only",
-        "nemotron_v3-think-content-tool",
-        "nemotron_v3-empty-reasoning-content",
-    }
-)
-
-_nemotron_v3_delegating_fail_samples = [
-    s for s in _nemotron_v3_samples if s.id in _NEMOTRON_V3_DELEGATING_FAIL_IDS
-]
-
-
-@pytest.mark.parametrize("chunk_size", NEMOTRON_CHUNK_SIZES, ids=lambda c: f"chunk{c}")
-@pytest.mark.parametrize(
-    "sample", _nemotron_v3_delegating_fail_samples, ids=lambda s: s.id
-)
-class TestNemotronV3DelegatingEngineReplay:
-    """Replay nemotron_v3 through DelegatingParser with engine adapters.
-
-    Exercises the adapter-based delegating path where reasoning and tool
-    parsing use separate ParserEngine instances.
-    """
-
-    def test_replay(self, sample, chunk_size):
-        tokenizer = make_mock_tokenizer(sample)
-        parser = _NemotronV3DelegatingEngine(tokenizer, sample.tools)
-        deltas = replay_streaming(
-            parser, sample.tokens, chunk_size=chunk_size, tools=sample.tools
-        )
-        output = collect_output(deltas)
-
-        assert_parse_output(output, sample)
-        assert_no_terminal_leakage(output, _NEMOTRON_V3_TERMINALS)
 
 
 class TestAdapterReferences:

@@ -571,50 +571,6 @@ def build_sample(model: str, scenario: Scenario) -> Sample:
     return _BUILDERS[model](scenario)
 
 
-_MODEL_TO_PARSER_NAME: dict[str, str] = {
-    "qwen3": "qwen3_engine",
-    "gemma4": "gemma4_engine",
-    "deepseek_v4": "deepseek_v4_engine",
-    "nemotron_v3": "nemotron_v3_engine",
-}
-
-
-def build_serving_samples(model: str) -> list:
-    """Build serving-layer samples for a model.
-
-    Returns a list of ``ServingSample`` objects (from the serving replay
-    harness) with parser metadata derived from the model name and each
-    sample's expected output.
-    """
-    from tests.entrypoints.serving_replay.replay_harness import (
-        ServingSample,
-    )
-
-    parser_name = _MODEL_TO_PARSER_NAME[model]
-    result = []
-    for sample in build_samples(model):
-        has_tools = sample.expected_tool_calls is not None
-        result.append(
-            ServingSample(
-                id=sample.id,
-                description=sample.description,
-                source=sample.source,
-                vocab=sample.vocab,
-                tokens=sample.tokens,
-                expected_reasoning=sample.expected_reasoning,
-                expected_content=sample.expected_content,
-                expected_tool_calls=sample.expected_tool_calls,
-                parser_name=parser_name,
-                tool_choice="auto" if has_tools else "none",
-                tools=sample.tools,
-                include_reasoning=sample.expected_reasoning is not None,
-                expected_finish_reason=("tool_calls" if has_tools else "stop"),
-                chat_template_kwargs=sample.chat_template_kwargs,
-            )
-        )
-    return result
-
-
 def build_scaling_sample(
     model: str, token_count: int, validate: bool = False
 ) -> Sample:
