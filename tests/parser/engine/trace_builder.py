@@ -190,6 +190,28 @@ def _tokenize(
 # ── Tool definitions ─────────────────────────────────────────────────
 
 
+def _infer_schema(value: object) -> dict:
+    """Infer a JSON Schema from a Python value, recursing into dicts/lists."""
+    if isinstance(value, bool):
+        return {"type": "boolean"}
+    if isinstance(value, int):
+        return {"type": "integer"}
+    if isinstance(value, float):
+        return {"type": "number"}
+    if isinstance(value, str):
+        return {"type": "string"}
+    if isinstance(value, dict):
+        return {
+            "type": "object",
+            "properties": {k: _infer_schema(v) for k, v in value.items()},
+        }
+    if isinstance(value, list) and value:
+        return {"type": "array", "items": _infer_schema(value[0])}
+    if isinstance(value, list):
+        return {"type": "array"}
+    return {}
+
+
 def _tool_defs(tool_calls: list[ToolCallSpec]) -> list[dict]:
     """Generate OpenAI-style tool definitions from tool call specs."""
     seen: set[str] = set()
@@ -198,20 +220,7 @@ def _tool_defs(tool_calls: list[ToolCallSpec]) -> list[dict]:
         if tc.name in seen:
             continue
         seen.add(tc.name)
-        properties: dict[str, dict] = {}
-        for key, value in tc.arguments.items():
-            if isinstance(value, bool):
-                properties[key] = {"type": "boolean"}
-            elif isinstance(value, int):
-                properties[key] = {"type": "integer"}
-            elif isinstance(value, float):
-                properties[key] = {"type": "number"}
-            elif isinstance(value, str):
-                properties[key] = {"type": "string"}
-            elif isinstance(value, list):
-                properties[key] = {"type": "array"}
-            elif isinstance(value, dict):
-                properties[key] = {"type": "object"}
+        properties = {k: _infer_schema(v) for k, v in tc.arguments.items()}
         tools.append(
             {
                 "type": "function",

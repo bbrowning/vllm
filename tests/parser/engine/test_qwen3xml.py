@@ -112,12 +112,12 @@ class TestNonStreaming:
         assert result.tools_called is True
         args = json.loads(result.tool_calls[0].function.arguments)
         assert args["string_field"] == "hello"
-        assert args["int_field"] == 42
-        assert args["float_field"] == 3.14
-        assert args["bool_field"] is True
-        assert args["null_field"] is None
-        assert args["array_field"] == ["a", "b", "c"]
-        assert args["object_field"] == {"nested": "value"}
+        assert args["int_field"] == "42"
+        assert args["float_field"] == "3.14"
+        assert args["bool_field"] == "true"
+        assert args["null_field"] == "null"
+        assert args["array_field"] == '["a", "b", "c"]'
+        assert args["object_field"] == '{"nested": "value"}'
 
     def test_empty_arguments(self, parser, mock_request):
         text = "<tool_call>\n<function=refresh>\n</function>\n</tool_call>"
@@ -173,8 +173,8 @@ class TestNonStreaming:
         args = json.loads(result.tool_calls[0].function.arguments)
         assert args == {
             "query": "vllm parsing",
-            "limit": 10,
-            "exact_match": False,
+            "limit": "10",
+            "exact_match": "false",
         }
 
     def test_multiline_param_values(self, parser, mock_request):
@@ -249,13 +249,8 @@ class TestNonStreaming:
         assert result.tools_called is True
         args = json.loads(result.tool_calls[0].function.arguments)
         assert args == {
-            "questions": [
-                {
-                    "question": "Pick a color",
-                    "multiSelect": False,
-                    "answer": None,
-                }
-            ]
+            "questions": '[{"question": "Pick a color",'
+            ' "multiSelect": false, "answer": null}]',
         }
 
 
@@ -363,8 +358,8 @@ class TestStreaming:
         args_text = collect_tool_arguments(results)
         if args_text:
             parsed = json.loads(args_text)
-            assert parsed["count"] == 42
-            assert parsed["active"] is True
+            assert parsed["count"] == "42"
+            assert parsed["active"] == "true"
 
     def test_streaming_parallel_calls(self, parser, mock_request):
         chunks = [
@@ -430,7 +425,7 @@ class TestStreaming:
         args_text = collect_tool_arguments(results)
         assert args_text
         parsed = json.loads(args_text)
-        assert parsed["x"] == 1
+        assert parsed["x"] == "1"
 
     def test_char_by_char_streaming(self, mock_request):
         """Feed text character-by-character to test lexer robustness.
@@ -644,7 +639,7 @@ class TestSchemaAwareTypeCoercion:
         assert args["count"] == 42
         assert isinstance(args["count"], int)
 
-    def test_no_tools_falls_back_to_blind_coercion(self, parser, mock_request):
+    def test_no_tools_keeps_strings(self, parser, mock_request):
         text = (
             "<tool_call>\n"
             "<function=TaskUpdate>\n"
@@ -654,8 +649,8 @@ class TestSchemaAwareTypeCoercion:
         )
         result = parser.extract_tool_calls(text, mock_request)
         args = json.loads(result.tool_calls[0].function.arguments)
-        assert args["taskId"] == 1
-        assert isinstance(args["taskId"], int)
+        assert args["taskId"] == "1"
+        assert isinstance(args["taskId"], str)
 
     def test_streaming_string_param_not_coerced(self, parser_with_tools, mock_request):
         chunks = [
@@ -724,3 +719,254 @@ class TestAnyOfTypeCoercion:
         assert result.tools_called
         args = json.loads(result.tool_calls[0].function.arguments)
         assert args["port"] == "8080"
+
+
+class TestSchemaCoercionBoolNumberNull:
+    """Verify that _fix_arg_types coerces string values to non-string
+    schema types using coerce_to_schema_type."""
+
+    @pytest.fixture
+    def tools(self):
+        from vllm.entrypoints.openai.chat_completion.protocol import (
+            ChatCompletionToolsParam,
+        )
+
+        return [
+            ChatCompletionToolsParam(
+                type="function",
+                function={
+                    "name": "configure",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "enabled": {"type": "boolean"},
+                            "ratio": {"type": "number"},
+                            "count": {"type": "integer"},
+                            "value": {"type": ["integer", "null"]},
+                            "label": {"type": "string"},
+                        },
+                    },
+                },
+            )
+        ]
+
+    @pytest.fixture
+    def parser_with_tools(self, mock_tokenizer, tools):
+        return ParserEngine(
+            mock_tokenizer,
+            tools=tools,
+            parser_engine_config=qwen3xml_config(),
+        )
+
+    def test_bool_param_coerced(self, parser_with_tools, mock_request):
+        text = (
+            "<tool_call>\n"
+            "<function=configure>\n"
+            "<parameter=enabled>true</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+        result = parser_with_tools.extract_tool_calls(text, mock_request)
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args["enabled"] is True
+        assert isinstance(args["enabled"], bool)
+
+    def test_number_param_whole_normalized(self, parser_with_tools, mock_request):
+        text = (
+            "<tool_call>\n"
+            "<function=configure>\n"
+            "<parameter=ratio>5.0</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+        result = parser_with_tools.extract_tool_calls(text, mock_request)
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args["ratio"] == 5
+        assert isinstance(args["ratio"], int)
+
+    def test_number_param_fractional(self, parser_with_tools, mock_request):
+        text = (
+            "<tool_call>\n"
+            "<function=configure>\n"
+            "<parameter=ratio>3.14</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+        result = parser_with_tools.extract_tool_calls(text, mock_request)
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args["ratio"] == pytest.approx(3.14)
+        assert isinstance(args["ratio"], float)
+
+    def test_null_coerced_when_in_schema(self, parser_with_tools, mock_request):
+        text = (
+            "<tool_call>\n"
+            "<function=configure>\n"
+            "<parameter=value>null</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+        result = parser_with_tools.extract_tool_calls(text, mock_request)
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args["value"] is None
+
+    def test_null_stays_string_without_null_schema(
+        self, parser_with_tools, mock_request
+    ):
+        text = (
+            "<tool_call>\n"
+            "<function=configure>\n"
+            "<parameter=label>null</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+        result = parser_with_tools.extract_tool_calls(text, mock_request)
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args["label"] == "null"
+        assert isinstance(args["label"], str)
+
+    def test_streaming_bool_param_coerced(self, parser_with_tools, mock_request):
+        chunks = [
+            "<tool_call>\n",
+            "<function=configure>\n",
+            "<parameter=enabled>true</parameter>\n",
+            "</function>\n",
+            "</tool_call>",
+        ]
+        results = simulate_tool_streaming(parser_with_tools, mock_request, chunks)
+        args_str = collect_tool_arguments(results)
+        args = json.loads(args_str)
+        assert args["enabled"] is True
+        assert isinstance(args["enabled"], bool)
+
+    def test_streaming_number_param_coerced(self, parser_with_tools, mock_request):
+        chunks = [
+            "<tool_call>\n",
+            "<function=configure>\n",
+            "<parameter=ratio>3.14</parameter>\n",
+            "</function>\n",
+            "</tool_call>",
+        ]
+        results = simulate_tool_streaming(parser_with_tools, mock_request, chunks)
+        args_str = collect_tool_arguments(results)
+        args = json.loads(args_str)
+        assert args["ratio"] == pytest.approx(3.14)
+        assert isinstance(args["ratio"], float)
+
+    def test_streaming_matches_non_streaming_comprehensive(
+        self, parser_with_tools, mock_request
+    ):
+        text = (
+            "<tool_call>\n"
+            "<function=configure>\n"
+            "<parameter=enabled>true</parameter>\n"
+            "<parameter=ratio>5.0</parameter>\n"
+            "<parameter=count>42</parameter>\n"
+            "<parameter=value>null</parameter>\n"
+            "<parameter=label>hello</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+        non_stream = parser_with_tools.extract_tool_calls(text, mock_request)
+        ns_args = json.loads(non_stream.tool_calls[0].function.arguments)
+
+        chunks = [line + "\n" for line in text.split("\n") if line]
+        results = simulate_tool_streaming(parser_with_tools, mock_request, chunks)
+        s_args = json.loads(collect_tool_arguments(results))
+
+        assert s_args == ns_args
+        assert ns_args == {
+            "enabled": True,
+            "ratio": 5,
+            "count": 42,
+            "value": None,
+            "label": "hello",
+        }
+
+
+class TestNestedSchemaCoercion:
+    """Verify that _fix_arg_types recurses into nested objects and arrays."""
+
+    @pytest.fixture
+    def tools(self):
+        from vllm.entrypoints.openai.chat_completion.protocol import (
+            ChatCompletionToolsParam,
+        )
+
+        return [
+            ChatCompletionToolsParam(
+                type="function",
+                function={
+                    "name": "search",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string"},
+                            "filters": {
+                                "type": "object",
+                                "properties": {
+                                    "language": {"type": "string"},
+                                    "min_stars": {"type": "integer"},
+                                },
+                            },
+                            "tags": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                            "limits": {
+                                "type": "array",
+                                "items": {"type": "integer"},
+                            },
+                            "verbose": {"type": "boolean"},
+                        },
+                    },
+                },
+            )
+        ]
+
+    @pytest.fixture
+    def parser_with_tools(self, mock_tokenizer, tools):
+        return ParserEngine(
+            mock_tokenizer,
+            tools=tools,
+            parser_engine_config=qwen3xml_config(),
+        )
+
+    def test_nested_object_coerced(self, parser_with_tools, mock_request):
+        text = (
+            "<tool_call>\n"
+            "<function=search>\n"
+            '<parameter=filters>{"language": "python",'
+            ' "min_stars": 100}</parameter>\n'
+            "</function>\n"
+            "</tool_call>"
+        )
+        result = parser_with_tools.extract_tool_calls(text, mock_request)
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args["filters"] == {"language": "python", "min_stars": 100}
+        assert isinstance(args["filters"]["min_stars"], int)
+
+    def test_nested_array_items_coerced(self, parser_with_tools, mock_request):
+        text = (
+            "<tool_call>\n"
+            "<function=search>\n"
+            "<parameter=limits>[10, 20, 30]</parameter>\n"
+            "</function>\n"
+            "</tool_call>"
+        )
+        result = parser_with_tools.extract_tool_calls(text, mock_request)
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args["limits"] == [10, 20, 30]
+        assert all(isinstance(v, int) for v in args["limits"])
+
+    def test_nested_string_array_not_coerced(self, parser_with_tools, mock_request):
+        text = (
+            "<tool_call>\n"
+            "<function=search>\n"
+            '<parameter=tags>["ml", "42"]</parameter>\n'
+            "</function>\n"
+            "</tool_call>"
+        )
+        result = parser_with_tools.extract_tool_calls(text, mock_request)
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args["tags"] == ["ml", "42"]
+        assert all(isinstance(v, str) for v in args["tags"])

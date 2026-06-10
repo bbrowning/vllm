@@ -36,7 +36,6 @@ from vllm.parser.engine.parser_engine_config import (
     ParserState,
     Transition,
 )
-from vllm.tool_parsers.utils import coerce_value
 
 if TYPE_CHECKING:
     from vllm.entrypoints.openai.chat_completion.protocol import (
@@ -66,7 +65,7 @@ def _qwen3xml_arg_converter(raw_args: str, partial: bool) -> str:
     for match in _PARAM_RE.finditer(raw_args):
         name = match.group(1)
         value = match.group(2)
-        params[name] = coerce_value(value)
+        params[name] = value.strip()
 
     if partial:
         remaining = _PARAM_RE.sub("", raw_args)

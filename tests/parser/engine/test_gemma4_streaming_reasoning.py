@@ -652,7 +652,7 @@ class TestNonStreamingToolCalls:
 
         assert result.tools_called is True
         args = json.loads(result.tool_calls[0].function.arguments)
-        assert args == {"is_active": True, "count": 42, "score": 3.14}
+        assert args == {"is_active": "true", "count": "42", "score": "3.14"}
 
     def test_no_arguments(self, tool_call_parser, mock_request):
         text = "<|tool_call>call:get_status{}<tool_call|>"
@@ -765,8 +765,8 @@ class TestStreamingToolCallEdgeCases:
         args_text = collect_tool_arguments(results)
         if args_text:
             parsed = json.loads(args_text)
-            assert parsed["count"] == 42
-            assert parsed["active"] is True
+            assert parsed["count"] == "42"
+            assert parsed["active"] == "true"
 
     def test_streaming_empty_args(self, tool_call_parser, mock_request):
         chunks = [
@@ -808,7 +808,7 @@ class TestStreamingToolCallEdgeCases:
         args_text = collect_tool_arguments(results)
         assert args_text
         parsed = json.loads(args_text)
-        assert parsed["input"]["all"] is True
+        assert parsed["input"]["all"] == "true"
 
     def test_streaming_number_split(self, tool_call_parser, mock_request):
         chunks = [
@@ -822,7 +822,7 @@ class TestStreamingToolCallEdgeCases:
         args_text = collect_tool_arguments(results)
         assert args_text
         parsed = json.loads(args_text)
-        assert parsed["count"] == 42
+        assert parsed["count"] == "42"
 
     def test_streaming_trailing_bare_bool(self, tool_call_parser, mock_request):
         chunks = [
@@ -845,7 +845,7 @@ class TestStreamingToolCallEdgeCases:
             "file_path": "src/env.py",
             "old_string": "old_val",
             "new_string": "new_val",
-            "replace_all": False,
+            "replace_all": "false",
         }
 
         assert args_text.count("replace_all") == 1
@@ -1043,3 +1043,146 @@ class TestGemma4SchemaAwareTypeCoercion:
         s_args = json.loads(collect_tool_arguments(results))
 
         assert s_args == ns_args
+
+
+class TestGemma4SchemaCoercionBoolNumberNull:
+    """Verify that _fix_arg_types coerces string values to non-string
+    schema types for the Gemma4 parser."""
+
+    @pytest.fixture
+    def tools(self):
+        from vllm.entrypoints.openai.chat_completion.protocol import (
+            ChatCompletionToolsParam,
+        )
+
+        return [
+            ChatCompletionToolsParam(
+                type="function",
+                function={
+                    "name": "configure",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "enabled": {"type": "boolean"},
+                            "ratio": {"type": "number"},
+                            "label": {"type": "string"},
+                            "value": {"type": ["string", "null"]},
+                        },
+                    },
+                },
+            )
+        ]
+
+    @pytest.fixture
+    def parser_with_tools(self, tool_call_tokenizer, tools):
+        return Gemma4Parser(tool_call_tokenizer, tools=tools)
+
+    def test_bool_param_coerced(self, parser_with_tools, mock_request):
+        text = "<|tool_call>call:configure{enabled:true}<tool_call|>"
+        result = parser_with_tools.extract_tool_calls(text, mock_request)
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args["enabled"] is True
+        assert isinstance(args["enabled"], bool)
+
+    def test_number_whole_normalized(self, parser_with_tools, mock_request):
+        text = "<|tool_call>call:configure{ratio:5.0}<tool_call|>"
+        result = parser_with_tools.extract_tool_calls(text, mock_request)
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args["ratio"] == 5
+        assert isinstance(args["ratio"], int)
+
+    def test_null_coerced_when_nullable(self, parser_with_tools, mock_request):
+        text = "<|tool_call>call:configure{value:null}<tool_call|>"
+        result = parser_with_tools.extract_tool_calls(text, mock_request)
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args["value"] is None
+
+    def test_null_stays_string_without_null_schema(
+        self, parser_with_tools, mock_request
+    ):
+        text = "<|tool_call>call:configure{label:null}<tool_call|>"
+        result = parser_with_tools.extract_tool_calls(text, mock_request)
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args["label"] == "null"
+        assert isinstance(args["label"], str)
+
+    def test_streaming_type_stability(self, parser_with_tools, mock_request):
+        """Values streamed incrementally must not cause prefix
+        incompatibility when types are coerced."""
+        text = (
+            "<|tool_call>call:configure{"
+            "enabled:true,"
+            "ratio:3.14,"
+            "label:hello}"
+            "<tool_call|>"
+        )
+        non_stream = parser_with_tools.extract_tool_calls(text, mock_request)
+        ns_args = json.loads(non_stream.tool_calls[0].function.arguments)
+
+        chunks = [
+            "<|tool_call>",
+            "call:configure{",
+            "enabled:true,",
+            "ratio:3.14,",
+            "label:hello}",
+            "<tool_call|>",
+        ]
+        results = simulate_tool_streaming(parser_with_tools, mock_request, chunks)
+        s_args = json.loads(collect_tool_arguments(results))
+
+        assert s_args == ns_args
+        assert ns_args == {
+            "enabled": True,
+            "ratio": pytest.approx(3.14),
+            "label": "hello",
+        }
+
+
+class TestGemma4NestedSchemaCoercion:
+    """Verify that _fix_arg_types recurses into nested Gemma4 objects."""
+
+    @pytest.fixture
+    def tools(self):
+        from vllm.entrypoints.openai.chat_completion.protocol import (
+            ChatCompletionToolsParam,
+        )
+
+        return [
+            ChatCompletionToolsParam(
+                type="function",
+                function={
+                    "name": "search",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string"},
+                            "filters": {
+                                "type": "object",
+                                "properties": {
+                                    "language": {"type": "string"},
+                                    "min_stars": {"type": "integer"},
+                                },
+                            },
+                        },
+                    },
+                },
+            )
+        ]
+
+    @pytest.fixture
+    def parser_with_tools(self, tool_call_tokenizer, tools):
+        return Gemma4Parser(tool_call_tokenizer, tools=tools)
+
+    def test_nested_object_coerced(self, parser_with_tools, mock_request):
+        text = (
+            "<|tool_call>call:search{"
+            'query:<|"|>vllm<|"|>,'
+            "filters:{language:python,min_stars:100}}"
+            "<tool_call|>"
+        )
+        result = parser_with_tools.extract_tool_calls(text, mock_request)
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args["query"] == "vllm"
+        assert args["filters"]["language"] == "python"
+        assert args["filters"]["min_stars"] == 100
+        assert isinstance(args["filters"]["min_stars"], int)

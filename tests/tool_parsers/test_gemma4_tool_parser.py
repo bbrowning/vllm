@@ -45,6 +45,64 @@ def mock_tokenizer():
     return tokenizer
 
 
+def _make_tool(name, properties):
+    from vllm.entrypoints.openai.chat_completion.protocol import (
+        ChatCompletionToolsParam,
+    )
+
+    return ChatCompletionToolsParam(
+        type="function",
+        function={
+            "name": name,
+            "parameters": {"type": "object", "properties": properties},
+        },
+    )
+
+
+_TOOLS = [
+    _make_tool(
+        "set_status",
+        {
+            "is_active": {"type": "boolean"},
+            "count": {"type": "integer"},
+            "score": {"type": "number"},
+        },
+    ),
+    _make_tool(
+        "set_config",
+        {
+            "count": {"type": "integer"},
+            "active": {"type": "boolean"},
+        },
+    ),
+    _make_tool(
+        "search",
+        {
+            "input": {
+                "type": "object",
+                "properties": {"all": {"type": "boolean"}},
+            },
+        },
+    ),
+    _make_tool(
+        "set",
+        {
+            "flag": {"type": "boolean"},
+            "count": {"type": "integer"},
+        },
+    ),
+    _make_tool(
+        "Edit",
+        {
+            "file_path": {"type": "string"},
+            "old_string": {"type": "string"},
+            "new_string": {"type": "string"},
+            "replace_all": {"type": "boolean"},
+        },
+    ),
+]
+
+
 @pytest.fixture(params=["old", "engine"], ids=["old", "engine"])
 def parser(mock_tokenizer, request):
     if request.param == "old":
@@ -54,7 +112,7 @@ def parser(mock_tokenizer, request):
             Gemma4EngineToolParser,
         )
 
-        return Gemma4EngineToolParser(mock_tokenizer)
+        return Gemma4EngineToolParser(mock_tokenizer, tools=_TOOLS)
 
 
 @pytest.fixture

@@ -27,7 +27,11 @@ from vllm.parser.abstract_parser import Parser, StreamState
 from vllm.parser.engine.events import EventType, SemanticEvent
 from vllm.parser.engine.parser_engine_config import ParserEngineConfig, ParserState
 from vllm.parser.engine.streaming_parser_engine import StreamingParserEngine
-from vllm.tool_parsers.utils import extract_types_from_schema, find_tool_properties
+from vllm.tool_parsers.utils import (
+    coerce_to_schema_type,
+    extract_types_from_schema,
+    find_tool_properties,
+)
 
 if TYPE_CHECKING:
     from openai.types.responses.response_output_item import ResponseOutputItem
@@ -159,11 +163,68 @@ class ParserEngine(Parser):
 
     # ── Schema-aware type correction ─────────────────────────────────
 
-    def _fix_arg_types(self, args_json: str, func_name: str) -> str:
-        """Correct parameter types wrongly coerced by the arg_converter.
+    @staticmethod
+    def _coerce_value(value: object, schema: dict) -> tuple[object, bool]:
+        """Coerce a single value according to its schema.
 
-        The arg_converter may blindly coerce e.g. ``"1"`` to ``1``.  If the
-        tool schema declares the parameter as ``"string"``, revert to string.
+        Returns ``(coerced_value, changed)``.
+        """
+        if isinstance(value, str):
+            types = extract_types_from_schema(schema)
+            coerced = coerce_to_schema_type(value, types)
+            if coerced is not value:
+                return coerced, True
+            return value, False
+
+        if isinstance(value, dict):
+            nested_props = schema.get("properties")
+            if isinstance(nested_props, dict):
+                _, changed = ParserEngine._coerce_dict(value, nested_props)
+                return value, changed
+            return value, False
+
+        if isinstance(value, list):
+            items_schema = schema.get("items")
+            if isinstance(items_schema, dict):
+                changed = False
+                for i, item in enumerate(value):
+                    coerced, item_changed = ParserEngine._coerce_value(
+                        item, items_schema
+                    )
+                    if item_changed:
+                        value[i] = coerced
+                        changed = True
+                return value, changed
+            return value, False
+
+        types = extract_types_from_schema(schema)
+        as_str = json.dumps(value, ensure_ascii=False)
+        coerced = coerce_to_schema_type(as_str, types)
+        if coerced != value:
+            return coerced, True
+        return value, False
+
+    @staticmethod
+    def _coerce_dict(args: dict, properties: dict) -> tuple[dict, bool]:
+        """Coerce all values in *args* using *properties* schemas."""
+        changed = False
+        for key, value in args.items():
+            prop = properties.get(key)
+            if not isinstance(prop, dict):
+                continue
+            coerced, val_changed = ParserEngine._coerce_value(value, prop)
+            if val_changed:
+                args[key] = coerced
+                changed = True
+        return args, changed
+
+    def _fix_arg_types(self, args_json: str, func_name: str) -> str:
+        """Correct parameter types using the tool schema.
+
+        String values are coerced via :func:`coerce_to_schema_type`.
+        Nested objects and arrays are recursed into when the schema
+        defines ``properties`` or ``items``.  Without a schema, values
+        stay as strings.
         """
         if not self._tools or not func_name:
             return args_json
@@ -178,22 +239,7 @@ class ParserEngine(Parser):
         if not properties:
             return args_json
 
-        changed = False
-        for key, value in args.items():
-            if isinstance(value, str):
-                continue
-            prop = properties.get(key)
-            if not isinstance(prop, dict):
-                continue
-            if "string" not in extract_types_from_schema(prop):
-                continue
-            if isinstance(value, bool):
-                args[key] = "true" if value else "false"
-            elif value is None:
-                args[key] = "null"
-            else:
-                args[key] = str(value)
-            changed = True
+        _, changed = self._coerce_dict(args, properties)
 
         if changed:
             return json.dumps(args, ensure_ascii=False)

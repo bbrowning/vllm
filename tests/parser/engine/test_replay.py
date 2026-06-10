@@ -59,7 +59,7 @@ class TestGemma4ReplayWithHoldback:
 
     def test_replay(self, sample, chunk_size, holdback):
         tokenizer = make_mock_tokenizer(sample)
-        parser = Gemma4Parser(tokenizer)
+        parser = Gemma4Parser(tokenizer, sample.tools)
         deltas = replay_streaming(
             parser,
             sample.tokens,
@@ -94,7 +94,7 @@ class TestQwen3ReplayWithHoldback:
 
     def test_replay(self, sample, chunk_size, holdback):
         tokenizer = make_mock_tokenizer(sample)
-        parser = Qwen3Parser(tokenizer)
+        parser = Qwen3Parser(tokenizer, sample.tools)
         deltas = replay_streaming(
             parser,
             sample.tokens,
@@ -126,7 +126,7 @@ class TestGemma4TextHoldback:
 
     def test_replay(self, sample, delay):
         tokenizer = make_mock_tokenizer(sample)
-        parser = Gemma4Parser(tokenizer)
+        parser = Gemma4Parser(tokenizer, sample.tools)
         deltas = replay_with_text_holdback(parser, sample.tokens, text_delay=delay)
         output = collect_output(deltas)
 
@@ -144,7 +144,7 @@ class TestParserEngineAdjustRequest:
     def test_adjust_request_disables_skip_special_tokens(self):
         sample = _gemma4_samples[0]
         tokenizer = make_mock_tokenizer(sample)
-        parser = Gemma4Parser(tokenizer)
+        parser = Gemma4Parser(tokenizer, sample.tools)
         request = _test_request()
         assert request.skip_special_tokens is True
         adjusted = parser.adjust_request(request)
@@ -196,7 +196,7 @@ class TestNemotronV3Replay:
 
     def test_replay(self, sample, chunk_size):
         tokenizer = make_mock_tokenizer(sample)
-        parser = NemotronV3Parser(tokenizer)
+        parser = NemotronV3Parser(tokenizer, sample.tools)
         deltas = replay_streaming(parser, sample.tokens, chunk_size=chunk_size)
         output = collect_output(deltas)
 
@@ -268,7 +268,7 @@ class TestNemotronV3DeferralFinish:
             pytest.skip("no tool calls in sample")
 
         tokenizer = make_mock_tokenizer(sample)
-        parser = NemotronV3Parser(tokenizer)
+        parser = NemotronV3Parser(tokenizer, sample.tools)
 
         request = _test_request()
 

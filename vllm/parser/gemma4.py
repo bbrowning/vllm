@@ -37,7 +37,6 @@ from vllm.parser.engine.parser_engine_config import (
     ParserState,
     Transition,
 )
-from vllm.tool_parsers.utils import coerce_value
 
 if TYPE_CHECKING:
     from vllm.entrypoints.openai.chat_completion.protocol import (
@@ -81,6 +80,7 @@ TOOL_CALL_END = "<tool_call|>"
 STRING_DELIM = '<|"|>'
 
 logger = init_logger(__name__)
+
 
 # ---------------------------------------------------------------------------
 # Gemma4 argument parser
@@ -234,15 +234,14 @@ def _parse_gemma4_args(args_str: str, *, partial: bool = False) -> dict:
                     i,
                 )
                 break
-            if partial:
-                raw_val = args_str[val_start:i].strip()
-                if raw_val.endswith("."):
-                    # Trailing dot means decimal digits may still arrive
-                    # (e.g. "108." may become "108.2"). Parsing now would
-                    # yield float("108.") == 108.0, whose json repr "108.0"
-                    # corrupts the streaming diff when the true digit lands.
-                    break
-            result[key] = coerce_value(args_str[val_start:i])
+            raw_val = args_str[val_start:i].strip()
+            if partial and raw_val.endswith("."):
+                # Trailing dot means decimal digits may still arrive
+                # (e.g. "108." may become "108.2"). Parsing now would
+                # yield float("108.") == 108.0, whose json repr "108.0"
+                # corrupts the streaming diff when the true digit lands.
+                break
+            result[key] = raw_val
 
     return result
 
@@ -320,11 +319,10 @@ def _parse_gemma4_array(arr_str: str, *, partial: bool = False) -> list:
                     i,
                 )
                 break
-            if partial:
-                raw_val = arr_str[val_start:i].strip()
-                if raw_val.endswith("."):
-                    break
-            items.append(coerce_value(arr_str[val_start:i]))
+            raw_val = arr_str[val_start:i].strip()
+            if partial and raw_val.endswith("."):
+                break
+            items.append(raw_val)
 
     return items
 
