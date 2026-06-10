@@ -29,9 +29,9 @@ if TYPE_CHECKING:
 
 
 @functools.cache
-def nemotron_v3_config() -> ParserEngineConfig:
+def nemotron_v3_config(thinking: bool = True) -> ParserEngineConfig:
     return dataclasses.replace(
-        qwen3_config(),
+        qwen3_config(thinking=thinking),
         name="nemotron_v3",
         strip_trailing_reasoning_whitespace=True,
     )
@@ -50,10 +50,12 @@ class NemotronV3Parser(Qwen3Parser):
         tools: list[Tool] | None = None,
         **kwargs,
     ) -> None:
+        chat_kwargs = kwargs.get("chat_template_kwargs", {}) or {}
+        thinking = chat_kwargs.get("enable_thinking", True)
         super().__init__(
             tokenizer,
             tools,
-            parser_engine_config=nemotron_v3_config(),
+            parser_engine_config=nemotron_v3_config(thinking=thinking),
             **kwargs,
         )
 

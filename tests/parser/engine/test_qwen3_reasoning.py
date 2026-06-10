@@ -15,6 +15,7 @@ import pytest
 
 from tests.parser.engine.conftest import make_mock_tokenizer
 from tests.parser.engine.streaming_helpers import simulate_reasoning_streaming
+from vllm.parser.engine.parser_engine_config import ParserState
 from vllm.parser.qwen3 import Qwen3Parser, qwen3_config
 
 _THINK_START_ID = 50
@@ -32,8 +33,13 @@ _QWEN3_VOCAB = {
 
 
 @pytest.fixture
-def parser():
-    return Qwen3Parser(make_mock_tokenizer(_QWEN3_VOCAB))
+def mock_tokenizer():
+    return make_mock_tokenizer(_QWEN3_VOCAB)
+
+
+@pytest.fixture
+def parser(mock_tokenizer):
+    return Qwen3Parser(mock_tokenizer)
 
 
 class TestNonStreaming:
@@ -465,3 +471,56 @@ class TestWhitespaceStrippingDisabled:
         )
         assert reasoning == "thinking.\n\n"
         assert content == "done"
+
+
+class TestThinkingDisabled:
+    """When ``enable_thinking=False``, the chat template pre-fills a closed
+    ``<think>\\n\\n</think>\\n\\n`` block.  The model output starts in content
+    state, so the parser's initial state must be CONTENT — not REASONING.
+    """
+
+    def test_thinking_disabled_initial_state_is_content(self, mock_tokenizer):
+        p = Qwen3Parser(
+            mock_tokenizer,
+            chat_template_kwargs={"enable_thinking": False},
+        )
+        assert p.parser_engine_config.initial_state == ParserState.CONTENT
+
+    def test_thinking_enabled_initial_state_is_reasoning(self, mock_tokenizer):
+        p = Qwen3Parser(
+            mock_tokenizer,
+            chat_template_kwargs={"enable_thinking": True},
+        )
+        assert p.parser_engine_config.initial_state == ParserState.REASONING
+
+    def test_default_initial_state_is_reasoning(self, mock_tokenizer):
+        p = Qwen3Parser(mock_tokenizer)
+        assert p.parser_engine_config.initial_state == ParserState.REASONING
+
+    def test_thinking_disabled_streaming_content_only(self, mock_tokenizer):
+        """Plain text with thinking disabled must stream as content, not
+        reasoning.  Before the fix, the REASONING initial state caused all
+        output to be emitted as reasoning chunks."""
+        p = Qwen3Parser(
+            mock_tokenizer,
+            chat_template_kwargs={"enable_thinking": False},
+        )
+        reasoning, content = simulate_reasoning_streaming(
+            p,
+            ["The answer", " is 42."],
+            [
+                (_TEXT_ID,),
+                (_TEXT_ID,),
+            ],
+        )
+        assert content == "The answer is 42."
+        assert reasoning == ""
+
+    def test_thinking_disabled_non_streaming(self, mock_tokenizer):
+        p = Qwen3Parser(
+            mock_tokenizer,
+            chat_template_kwargs={"enable_thinking": False},
+        )
+        reasoning, content = p.extract_reasoning("The answer is 42.", None)
+        assert reasoning is None
+        assert content == "The answer is 42."

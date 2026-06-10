@@ -139,10 +139,10 @@ def qwen3xml_config() -> ParserEngineConfig:
 
 
 @functools.cache
-def qwen3_config() -> ParserEngineConfig:
+def qwen3_config(thinking: bool = True) -> ParserEngineConfig:
     return ParserEngineConfig(
         name="qwen3",
-        initial_state=ParserState.REASONING,
+        initial_state=ParserState.REASONING if thinking else ParserState.CONTENT,
         terminals={
             # Reasoning terminals
             "THINK_START": "<think>",
@@ -235,7 +235,12 @@ class Qwen3Parser(ParserEngine):
         tools: list[Tool] | None = None,
         **kwargs,
     ) -> None:
-        kwargs.setdefault("parser_engine_config", qwen3_config())
+        chat_kwargs = kwargs.get("chat_template_kwargs", {}) or {}
+        self.thinking_enabled = chat_kwargs.get("enable_thinking", True)
+        kwargs.setdefault(
+            "parser_engine_config",
+            qwen3_config(thinking=self.thinking_enabled),
+        )
         super().__init__(
             tokenizer,
             tools,
@@ -244,9 +249,6 @@ class Qwen3Parser(ParserEngine):
         vocab = self.vocab
         self._tool_call_token_id: int | None = vocab.get("<tool_call>")
         self._tool_call_end_token_id: int | None = vocab.get("</tool_call>")
-
-        chat_kwargs = kwargs.get("chat_template_kwargs", {}) or {}
-        self.thinking_enabled = chat_kwargs.get("enable_thinking", True)
 
     def extract_reasoning(
         self,
