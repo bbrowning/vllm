@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import functools
 import json
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from vllm.entrypoints.openai.engine.protocol import DeltaMessage
@@ -491,11 +492,111 @@ class Gemma4Parser(ParserEngine):
         self._tool_response_token_id: int | None = vocab.get("<|tool_response>")
         self._reasoning_text: str = ""
         self._prefix_stripped: bool = False
+        self._channel_depth: int = 0
+        self._is_first_feed: bool = True
 
     def _reset(self, initial_state=None) -> None:
         super()._reset(initial_state=initial_state)
         self._reasoning_text = ""
         self._prefix_stripped = False
+        self._channel_depth = 0
+        self._is_first_feed = True
+
+    def _preprocess_feed(
+        self,
+        delta_text: str,
+        delta_token_ids: Sequence[int],
+    ) -> tuple[str, Sequence[int]]:
+        """Balance ``<|channel>``/``<channel|>`` for DiffusionGemma.
+
+        DiffusionGemma models sometimes produce malformed reasoning:
+
+        *Premature close* — opens ``<|channel>``, writes ``thought\\n``,
+        immediately closes with ``<channel|>``, then continues reasoning
+        outside the channel before another ``<channel|>``.
+
+        *Missing open* — never emits ``<|channel>`` at all, writes
+        reasoning as plain text, then closes with ``<channel|>``.
+
+        Both cases result in more ``<channel|>`` than ``<|channel>``.
+        This method inserts a missing start (first feed only) and/or
+        strips excess end tokens so the engine sees a balanced sequence.
+        """
+        start_id = self._reasoning_start_token_id
+        end_id = self._reasoning_end_token_id
+        is_first = self._is_first_feed
+        self._is_first_feed = False
+
+        if start_id is None or end_id is None:
+            return delta_text, delta_token_ids
+
+        if delta_token_ids:
+            return self._balance_channel_tokens(
+                delta_text, delta_token_ids, start_id, end_id, is_first
+            )
+
+        if delta_text:
+            return self._balance_channel_text(delta_text), delta_token_ids
+
+        return delta_text, delta_token_ids
+
+    def _balance_channel_tokens(
+        self,
+        delta_text: str,
+        delta_token_ids: Sequence[int],
+        start_id: int,
+        end_id: int,
+        is_first: bool,
+    ) -> tuple[str, Sequence[int]]:
+        starts = 0
+        ends = 0
+        for tid in delta_token_ids:
+            if tid == start_id:
+                starts += 1
+            elif tid == end_id:
+                ends += 1
+
+        effective_starts = self._channel_depth + starts
+
+        if is_first and effective_starts == 0 and ends > 0:
+            delta_token_ids = [start_id, *delta_token_ids]
+            delta_text = CHANNEL_START + delta_text
+            starts += 1
+            effective_starts = 1
+
+        excess = ends - effective_starts
+        if excess > 0:
+            new_ids: list[int] = []
+            stripped = 0
+            for tid in delta_token_ids:
+                if tid == end_id and stripped < excess:
+                    stripped += 1
+                    continue
+                new_ids.append(tid)
+            delta_token_ids = new_ids
+
+            for _ in range(excess):
+                delta_text = delta_text.replace(CHANNEL_END, "", 1)
+
+            self._channel_depth = effective_starts - (ends - excess)
+        else:
+            self._channel_depth = effective_starts - ends
+
+        return delta_text, delta_token_ids
+
+    def _balance_channel_text(self, text: str) -> str:
+        start_count = text.count(CHANNEL_START)
+        end_count = text.count(CHANNEL_END)
+
+        if start_count == 0 and end_count > 0:
+            text = CHANNEL_START + text
+            start_count = 1
+
+        excess = end_count - start_count
+        for _ in range(excess):
+            text = text.replace(CHANNEL_END, "", 1)
+
+        return text
 
     def is_reasoning_end(self, input_ids: list[int]) -> bool:
         end_id = self._reasoning_end_token_id

@@ -126,28 +126,31 @@ FULL_TOKEN_SEQUENCE.append((TOOL_CALL_END_ID, "<tool_call|>"))
 FULL_MODEL_OUTPUT = "".join(text for _, text in FULL_TOKEN_SEQUENCE)
 
 # Build a complete token-id-to-text map for the mock tokenizer
-_TOKEN_DECODE_MAP: dict[int, str] = {}
-for tid, text in FULL_TOKEN_SEQUENCE:
-    _TOKEN_DECODE_MAP[tid] = text
+_TOKEN_DECODE_MAP = {tid: text for tid, text in FULL_TOKEN_SEQUENCE}
 
 
 # ── Mock tokenizer ───────────────────────────────────────────────────
 
 
-def _make_mock_tokenizer():
+def _make_mock_tokenizer(decode_map=None, token_sequence=None):
     tokenizer = MagicMock()
 
     vocab = dict(SPECIAL_TEXT_TO_ID)
     tokenizer.get_vocab.return_value = vocab
-    tokenizer.encode.return_value = [tid for tid, _ in FULL_TOKEN_SEQUENCE]
+    seq = token_sequence if token_sequence is not None else FULL_TOKEN_SEQUENCE
+    tokenizer.encode.return_value = [tid for tid, _ in seq]
+
+    full_decode = {
+        **SPECIAL_TOKEN_MAP,
+        **(decode_map if decode_map is not None else _TOKEN_DECODE_MAP),
+    }
 
     def decode(ids, skip_special_tokens=False):
         parts = []
         for tid in ids:
             if skip_special_tokens and tid in SPECIAL_TOKEN_MAP:
                 continue
-            text = _TOKEN_DECODE_MAP.get(tid, f"?{tid}?")
-            parts.append(text)
+            parts.append(full_decode.get(tid, f"?{tid}?"))
         return "".join(parts)
 
     tokenizer.decode.side_effect = decode
@@ -1185,3 +1188,232 @@ class TestGemma4NestedSchemaCoercion:
         assert args["filters"]["language"] == "python"
         assert args["filters"]["min_stars"] == 100
         assert isinstance(args["filters"]["min_stars"], int)
+
+
+# ── DiffusionGemma malformed output: premature <channel|> ──────────
+# DiffusionGemma sometimes outputs:
+#   <|channel>thought\n<channel|>[reasoning]<channel|><|tool_call>...
+# The first <channel|> is premature; the actual reasoning text is
+# outside the channel block.
+
+DIFFUSION_REASONING = (
+    "The user wants to move log.txt into the archive directory. "
+    "I should call the cd tool first."
+)
+
+_diff_words = DIFFUSION_REASONING.split(" ")
+_DIFF_START = 7000
+DIFFUSION_REASONING_TOKENS: list[tuple[int, str]] = [
+    (_DIFF_START + i, ("" if i == 0 else " ") + w) for i, w in enumerate(_diff_words)
+]
+
+DIFFUSION_TOOL_TOKENS: list[tuple[int, str]] = [
+    (2000, "call"),
+    (2001, ":"),
+    (2050, "cd"),
+    (2003, "{"),
+    (2051, "folder"),
+    (2005, ":"),
+    (2052, "archive"),
+    (2015, "}"),
+]
+
+# Premature-close token sequence
+PREMATURE_CLOSE_TOKENS: list[tuple[int, str]] = [
+    (CHANNEL_START_ID, "<|channel>"),
+    (3000, "thought"),
+    (3001, "\n"),
+    (CHANNEL_END_ID, "<channel|>"),  # premature
+    *DIFFUSION_REASONING_TOKENS,
+    (CHANNEL_END_ID, "<channel|>"),  # real close
+    (TOOL_CALL_START_ID, "<|tool_call>"),
+    *DIFFUSION_TOOL_TOKENS[:4],  # call:cd{
+    *DIFFUSION_TOOL_TOKENS[4:6],  # folder:
+    (QUOTED_ID, '<|"|>'),
+    DIFFUSION_TOOL_TOKENS[6],  # archive
+    (QUOTED_ID, '<|"|>'),
+    DIFFUSION_TOOL_TOKENS[7],  # }
+    (TOOL_CALL_END_ID, "<tool_call|>"),
+]
+PREMATURE_CLOSE_OUTPUT = "".join(t for _, t in PREMATURE_CLOSE_TOKENS)
+
+_PREMATURE_DECODE = {tid: txt for tid, txt in PREMATURE_CLOSE_TOKENS}
+
+# Missing-open token sequence (no <|channel> at all)
+MISSING_OPEN_TOKENS: list[tuple[int, str]] = [
+    *DIFFUSION_REASONING_TOKENS,
+    (CHANNEL_END_ID, "<channel|>"),
+    (TOOL_CALL_START_ID, "<|tool_call>"),
+    *DIFFUSION_TOOL_TOKENS[:4],
+    *DIFFUSION_TOOL_TOKENS[4:6],
+    (QUOTED_ID, '<|"|>'),
+    DIFFUSION_TOOL_TOKENS[6],
+    (QUOTED_ID, '<|"|>'),
+    DIFFUSION_TOOL_TOKENS[7],
+    (TOOL_CALL_END_ID, "<tool_call|>"),
+]
+MISSING_OPEN_OUTPUT = "".join(t for _, t in MISSING_OPEN_TOKENS)
+
+_MISSING_DECODE = {tid: txt for tid, txt in MISSING_OPEN_TOKENS}
+
+
+class TestDiffusionGemmaPrematureClose:
+    """DiffusionGemma outputs ``<|channel>thought\\n<channel|>``
+    followed by reasoning text, then another ``<channel|>``.
+
+    The premature ``<channel|>`` should be stripped so reasoning
+    is correctly classified.
+    """
+
+    @pytest.fixture
+    def tokenizer(self):
+        return _make_mock_tokenizer(_PREMATURE_DECODE, PREMATURE_CLOSE_TOKENS)
+
+    @pytest.fixture
+    def parser(self, tokenizer):
+        return Gemma4Parser(tokenizer)
+
+    @pytest.fixture
+    def request_obj(self):
+        return ChatCompletionRequest(
+            model="test-model",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+    def test_streaming_reasoning_extracted(self, parser, tokenizer, request_obj):
+        results = _stream_tokens_batched(
+            parser,
+            tokenizer,
+            request_obj,
+            batch_size=256,
+            prompt_token_ids=[],
+        )
+        reasoning, content, tool_calls = _collect_fields(results)
+        assert "move log.txt" in reasoning
+        assert "move log.txt" not in (content or "")
+
+    def test_streaming_tool_call_extracted(self, parser, tokenizer, request_obj):
+        results = _stream_tokens_batched(
+            parser,
+            tokenizer,
+            request_obj,
+            batch_size=256,
+            prompt_token_ids=[],
+        )
+        _, _, tool_calls = _collect_fields(results)
+        names = [
+            tc.function.name for tc in tool_calls if tc.function and tc.function.name
+        ]
+        assert "cd" in names
+
+    def test_streaming_small_batches_tool_still_extracted(
+        self, parser, tokenizer, request_obj
+    ):
+        """With small batches the premature <channel|> and real <channel|>
+        land in different deltas.  Each delta looks balanced (1:1), so
+        the reasoning text is misclassified as content — but the tool
+        call must still be extracted correctly."""
+        results = _stream_tokens_batched(
+            parser,
+            tokenizer,
+            request_obj,
+            batch_size=3,
+            prompt_token_ids=[],
+        )
+        _, _, tool_calls = _collect_fields(results)
+        assert len(tool_calls) > 0
+        names = [
+            tc.function.name for tc in tool_calls if tc.function and tc.function.name
+        ]
+        assert "cd" in names
+
+    def test_non_streaming_reasoning(self, parser, request_obj):
+        reasoning, content = parser.extract_reasoning(
+            PREMATURE_CLOSE_OUTPUT,
+            request_obj,
+        )
+        assert reasoning is not None
+        assert "move log.txt" in reasoning
+        assert not reasoning.startswith("thought")
+
+    def test_non_streaming_tool_calls(self, parser, request_obj):
+        result = parser.extract_tool_calls(
+            PREMATURE_CLOSE_OUTPUT,
+            request_obj,
+        )
+        assert result.tools_called
+        assert result.tool_calls[0].function.name == "cd"
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args["folder"] == "archive"
+
+
+class TestDiffusionGemmaMissingOpen:
+    """DiffusionGemma sometimes omits ``<|channel>`` entirely and
+    writes reasoning as plain text followed by ``<channel|>``.
+
+    On the first delta a synthetic ``<|channel>`` should be inserted.
+    """
+
+    @pytest.fixture
+    def tokenizer(self):
+        return _make_mock_tokenizer(_MISSING_DECODE, MISSING_OPEN_TOKENS)
+
+    @pytest.fixture
+    def parser(self, tokenizer):
+        return Gemma4Parser(tokenizer)
+
+    @pytest.fixture
+    def request_obj(self):
+        return ChatCompletionRequest(
+            model="test-model",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+    def test_streaming_inserts_channel_start(self, parser, tokenizer, request_obj):
+        results = _stream_tokens_batched(
+            parser,
+            tokenizer,
+            request_obj,
+            batch_size=256,
+            prompt_token_ids=[],
+        )
+        reasoning, content, tool_calls = _collect_fields(results)
+        assert "move log.txt" in reasoning
+        assert "move log.txt" not in (content or "")
+
+    def test_streaming_tool_call_extracted(self, parser, tokenizer, request_obj):
+        results = _stream_tokens_batched(
+            parser,
+            tokenizer,
+            request_obj,
+            batch_size=256,
+            prompt_token_ids=[],
+        )
+        _, _, tool_calls = _collect_fields(results)
+        names = [
+            tc.function.name for tc in tool_calls if tc.function and tc.function.name
+        ]
+        assert "cd" in names
+
+    def test_non_streaming_reasoning(self, parser, request_obj):
+        reasoning, content = parser.extract_reasoning(
+            MISSING_OPEN_OUTPUT,
+            request_obj,
+        )
+        assert reasoning is not None
+        assert "move log.txt" in reasoning
+
+    def test_normal_gemma4_unaffected(self, request_obj):
+        """Normal Gemma4 output with 1:1 channel ratio is unchanged."""
+        tokenizer = _make_mock_tokenizer()
+        parser = Gemma4Parser(tokenizer)
+        results = _stream_tokens_batched(
+            parser,
+            tokenizer,
+            request_obj,
+            batch_size=10,
+            prompt_token_ids=[],
+        )
+        reasoning, content, tool_calls = _collect_fields(results)
+        assert "weather" in reasoning.lower()
+        assert len(tool_calls) > 0

@@ -185,6 +185,18 @@ class ParserEngine(Parser):
         request.skip_special_tokens = False
         return request
 
+    def _preprocess_feed(
+        self,
+        delta_text: str,
+        delta_token_ids: Sequence[int],
+    ) -> tuple[str, Sequence[int]]:
+        """Hook for subclasses to transform feed inputs before the engine.
+
+        Called before every ``self._engine.feed()``.  The default
+        implementation is a no-op pass-through.
+        """
+        return delta_text, delta_token_ids
+
     # ── Schema-aware type correction ─────────────────────────────────
 
     @staticmethod
@@ -343,7 +355,8 @@ class ParserEngine(Parser):
         finished: bool,
     ) -> DeltaMessage | None:
         self._check_skip_tool_parsing(request)
-        events = self._engine.feed(delta_text, delta_token_ids)
+        delta_text, pp_ids = self._preprocess_feed(delta_text, delta_token_ids)
+        events = self._engine.feed(delta_text, pp_ids)
         if finished:
             events.extend(self._engine.finish())
         result = self._events_to_delta(events, finished=finished)
@@ -387,7 +400,8 @@ class ParserEngine(Parser):
         request: ChatCompletionRequest | ResponsesRequest,
     ) -> tuple[str | None, str | None]:
         self._reset()
-        events = self._engine.feed(model_output, [])
+        model_output, _ids = self._preprocess_feed(model_output, [])
+        events = self._engine.feed(model_output, _ids)
         events.extend(self._engine.finish())
 
         reasoning_parts: list[str] = []
@@ -420,6 +434,7 @@ class ParserEngine(Parser):
         delta_token_ids: Sequence[int],
     ) -> DeltaMessage | None:
         self.initialize_streaming()
+        delta_text, delta_token_ids = self._preprocess_feed(delta_text, delta_token_ids)
         events = self._engine.feed(delta_text, delta_token_ids)
         return self._strip_trailing_reasoning(self._events_to_delta(events))
 
@@ -480,6 +495,7 @@ class ParserEngine(Parser):
     ) -> DeltaMessage | None:
         self.initialize_streaming()
         self._check_skip_tool_parsing(request)
+        delta_text, delta_token_ids = self._preprocess_feed(delta_text, delta_token_ids)
         events = self._engine.feed(delta_text, delta_token_ids)
         return self._strip_trailing_reasoning(self._events_to_delta(events))
 
@@ -540,6 +556,7 @@ class ParserEngine(Parser):
         state that ``_build_extracted_result`` reads.
         """
         self._reset(initial_state=initial_state)
+        text, token_ids = self._preprocess_feed(text, token_ids)
         events = self._engine.feed(text, token_ids)
         events.extend(self._engine.finish())
 
