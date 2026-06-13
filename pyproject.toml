@@ -156,6 +156,7 @@ inverse_std_variences = "inverse_std_variences"
 [tool.typos.default.extend-words]
 iy = "iy"
 indx = "indx"
+tru = "tru"
 # intel cpu features
 tme = "tme"
 dout = "dout"
