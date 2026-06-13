@@ -230,6 +230,40 @@ class TestParseGemma4Args:
         result = _parse_gemma4_args(":[t:[]")
         assert isinstance(result, dict)
 
+    # -- Variant syntax: = separator, '/\" quotes --
+
+    def test_equals_separator_single_quoted(self):
+        result = _parse_gemma4_args("folder='document'")
+        assert result == {"folder": "document"}
+
+    def test_equals_separator_double_quoted(self):
+        result = _parse_gemma4_args('dir_name="document/temp"')
+        assert result == {"dir_name": "document/temp"}
+
+    def test_equals_separator_bare_value(self):
+        result = _parse_gemma4_args("count=42")
+        assert result == {"count": "42"}
+
+    def test_colon_separator_single_quoted(self):
+        result = _parse_gemma4_args("folder:'document'")
+        assert result == {"folder": "document"}
+
+    def test_colon_separator_double_quoted(self):
+        result = _parse_gemma4_args('dir_name:"document/temp"')
+        assert result == {"dir_name": "document/temp"}
+
+    def test_mixed_separators(self):
+        result = _parse_gemma4_args("key1:val1,key2=val2")
+        assert result == {"key1": "val1", "key2": "val2"}
+
+    def test_unterminated_single_quote(self):
+        result = _parse_gemma4_args("key='unterminated")
+        assert result == {"key": "unterminated"}
+
+    def test_unterminated_double_quote(self):
+        result = _parse_gemma4_args('key="unterminated')
+        assert result == {"key": "unterminated"}
+
 
 class TestParseGemma4Array:
     def test_string_array(self):
@@ -262,6 +296,18 @@ class TestParseGemma4Array:
         # Stable elements before trailing-dot element are kept
         result = _parse_gemma4_array("42,108.,3", partial=True)
         assert result == ["42"]
+
+    def test_single_quoted_elements(self):
+        result = _parse_gemma4_array("'a','b','c'")
+        assert result == ["a", "b", "c"]
+
+    def test_double_quoted_elements(self):
+        result = _parse_gemma4_array('"x","y"')
+        assert result == ["x", "y"]
+
+    def test_unterminated_single_quote_in_array(self):
+        result = _parse_gemma4_array("'unterminated")
+        assert result == ["unterminated"]
 
 
 # ---------------------------------------------------------------------------
@@ -398,6 +444,66 @@ class TestExtractToolCalls:
         model_output = "<|tool_call>call:get_status{}<tool_call|>"
         result = parser.extract_tool_calls(model_output, mock_request)
 
+        assert result.tools_called is True
+        assert result.tool_calls[0].function.name == "get_status"
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args == {}
+
+    # -- Variant syntax tests (diffusion model) --
+
+    def test_variant_paren_delim_string_trailing_brace(self, parser, mock_request):
+        """Variant 1: ( opener, <|"|> strings, } closer."""
+        model_output = '<|tool_call>call:cd(folder:<|"|>document<|"|>}<tool_call|>'
+        result = parser.extract_tool_calls(model_output, mock_request)
+        assert result.tools_called is True
+        assert result.tool_calls[0].function.name == "cd"
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args == {"folder": "document"}
+
+    def test_variant_paren_single_quote_trailing_paren_brace(
+        self, parser, mock_request
+    ):
+        """Variant 2: ( opener, single quotes, )} closer."""
+        model_output = "<|tool_call>call:cd(folder='document')}<tool_call|>"
+        result = parser.extract_tool_calls(model_output, mock_request)
+        assert result.tools_called is True
+        assert result.tool_calls[0].function.name == "cd"
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args == {"folder": "document"}
+
+    def test_variant_paren_single_quote_paren_close(self, parser, mock_request):
+        """Variant 3: ( opener, single quotes, ) closer."""
+        model_output = "<|tool_call>call:mkdir(dir_name='document/temp')<tool_call|>"
+        result = parser.extract_tool_calls(model_output, mock_request)
+        assert result.tools_called is True
+        assert result.tool_calls[0].function.name == "mkdir"
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args == {"dir_name": "document/temp"}
+
+    def test_variant_paren_double_quote_paren_close(self, parser, mock_request):
+        """Variant 4: ( opener, double quotes, ) closer."""
+        model_output = '<|tool_call>call:mkdir(dir_name="document/temp")<tool_call|>'
+        result = parser.extract_tool_calls(model_output, mock_request)
+        assert result.tools_called is True
+        assert result.tool_calls[0].function.name == "mkdir"
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args == {"dir_name": "document/temp"}
+
+    def test_variant_paren_double_quote_trailing_paren_brace(
+        self, parser, mock_request
+    ):
+        """Variant 5: ( opener, double quotes, )} closer."""
+        model_output = '<|tool_call>call:mkdir(dir_name="document/temp")}<tool_call|>'
+        result = parser.extract_tool_calls(model_output, mock_request)
+        assert result.tools_called is True
+        assert result.tool_calls[0].function.name == "mkdir"
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args == {"dir_name": "document/temp"}
+
+    def test_variant_empty_parens(self, parser, mock_request):
+        """Variant: empty args with parens."""
+        model_output = "<|tool_call>call:get_status()<tool_call|>"
+        result = parser.extract_tool_calls(model_output, mock_request)
         assert result.tools_called is True
         assert result.tool_calls[0].function.name == "get_status"
         args = json.loads(result.tool_calls[0].function.arguments)
@@ -883,3 +989,84 @@ class TestStreamingExtraction:
         }
 
         assert args_text.count("replace_all") == 1
+
+    # -- Variant syntax streaming tests (diffusion model) --
+
+    def test_streaming_variant_paren_single_quote(self, parser, mock_request):
+        """Streaming: ( opener, single quotes, ) closer."""
+        chunks = [
+            "<|tool_call>",
+            "call:cd(",
+            "folder='docum",
+            "ent')",
+            "<tool_call|>",
+        ]
+        results = self._simulate_streaming(parser, mock_request, chunks)
+        name = self._collect_function_name(results)
+        assert name == "cd"
+        args_text = self._collect_arguments(results)
+        assert args_text
+        assert json.loads(args_text) == {"folder": "document"}
+
+    def test_streaming_variant_paren_double_quote(self, parser, mock_request):
+        """Streaming: ( opener, double quotes, ) closer."""
+        chunks = [
+            "<|tool_call>",
+            "call:mkdir(",
+            'dir_name="document/',
+            'temp")',
+            "<tool_call|>",
+        ]
+        results = self._simulate_streaming(parser, mock_request, chunks)
+        name = self._collect_function_name(results)
+        assert name == "mkdir"
+        args_text = self._collect_arguments(results)
+        assert args_text
+        assert json.loads(args_text) == {"dir_name": "document/temp"}
+
+    def test_streaming_variant_paren_trailing_brace(self, parser, mock_request):
+        """Streaming: ( opener, single quotes, )} closer."""
+        chunks = [
+            "<|tool_call>",
+            "call:cd(",
+            "folder='document')}",
+            "<tool_call|>",
+        ]
+        results = self._simulate_streaming(parser, mock_request, chunks)
+        name = self._collect_function_name(results)
+        assert name == "cd"
+        args_text = self._collect_arguments(results)
+        assert args_text
+        assert json.loads(args_text) == {"folder": "document"}
+
+    def test_streaming_variant_paren_delim_string(self, parser, mock_request):
+        """Streaming: ( opener with <|"|> strings and } closer."""
+        chunks = [
+            "<|tool_call>",
+            "call:cd(",
+            'folder:<|"|>docum',
+            'ent<|"|>}',
+            "<tool_call|>",
+        ]
+        results = self._simulate_streaming(parser, mock_request, chunks)
+        name = self._collect_function_name(results)
+        assert name == "cd"
+        args_text = self._collect_arguments(results)
+        assert args_text
+        assert json.loads(args_text) == {"folder": "document"}
+
+    def test_streaming_variant_equals_separator(self, parser, mock_request):
+        """Streaming: = separator with double quotes."""
+        chunks = [
+            "<|tool_call>",
+            "call:mkdir(",
+            'dir_name="doc',
+            'ument/temp")',
+            "<tool_call|>",
+        ]
+        results = self._simulate_streaming(parser, mock_request, chunks)
+        name = self._collect_function_name(results)
+        assert name == "mkdir"
+        args_text = self._collect_arguments(results)
+        assert args_text
+        assert json.loads(args_text) == {"dir_name": "document/temp"}

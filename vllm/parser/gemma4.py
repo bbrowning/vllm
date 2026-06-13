@@ -108,6 +108,20 @@ def _strip_partial_delim(value: str) -> str:
     return value
 
 
+def _extract_quoted(text: str, pos: int) -> tuple[str, int]:
+    """Extract a plain-quoted value starting at *pos* (a ``'`` or ``"``).
+
+    Returns ``(value, next_pos)``.  If the closing quote is missing the
+    value extends to the end of *text* and ``next_pos == len(text)``.
+    """
+    quote = text[pos]
+    start = pos + 1
+    end = text.find(quote, start)
+    if end == -1:
+        return text[start:], len(text)
+    return text[start:end], end + 1
+
+
 def _parse_gemma4_args(args_str: str, *, partial: bool = False) -> dict:
     """Parse Gemma4's custom key:value format into a Python dict.
 
@@ -141,7 +155,7 @@ def _parse_gemma4_args(args_str: str, *, partial: bool = False) -> dict:
             break
 
         key_start = i
-        while i < n and args_str[i] != ":":
+        while i < n and args_str[i] not in (":", "="):
             i += 1
         if i >= n:
             break
@@ -176,6 +190,11 @@ def _parse_gemma4_args(args_str: str, *, partial: bool = False) -> dict:
                 break
             result[key] = args_str[val_start:end_pos]
             i = end_pos + _DELIM_LEN
+
+        elif args_str[i] in ("'", '"'):
+            result[key], i = _extract_quoted(args_str, i)
+            if i >= n:
+                break
 
         elif args_str[i] == "{":
             depth = 1
@@ -267,6 +286,12 @@ def _parse_gemma4_array(arr_str: str, *, partial: bool = False) -> list:
             items.append(arr_str[i:end_pos])
             i = end_pos + _DELIM_LEN
 
+        elif arr_str[i] in ("'", '"'):
+            val, i = _extract_quoted(arr_str, i)
+            items.append(val)
+            if i >= n:
+                break
+
         elif arr_str[i] == "{":
             depth = 1
             obj_start = i + 1
@@ -338,6 +363,8 @@ def _gemma4_arg_converter(raw_args: str, partial: bool) -> str:
     text = raw_args.strip()
     if text.endswith("}"):
         text = text[:-1]
+    if text.endswith(")"):
+        text = text[:-1]
 
     parsed = _parse_gemma4_args(text, partial=partial)
     return json.dumps(parsed, ensure_ascii=False)
@@ -363,6 +390,7 @@ def gemma4_config() -> ParserEngineConfig:
             "TOOL_END": TOOL_CALL_END,
             "CALL_PREFIX": "call:",
             "OPEN_BRACE": "{",
+            "OPEN_PAREN": "(",
         },
         token_id_terminals={
             "THINK_START": CHANNEL_START,
@@ -398,6 +426,10 @@ def gemma4_config() -> ParserEngineConfig:
                 ParserState.TOOL_ARGS,
                 (),
             ),
+            (ParserState.TOOL_NAME, "OPEN_PAREN"): Transition(
+                ParserState.TOOL_ARGS,
+                (),
+            ),
             (ParserState.TOOL_ARGS, "TOOL_END"): Transition(
                 ParserState.CONTENT,
                 (EventType.TOOL_CALL_END,),
@@ -424,7 +456,7 @@ def gemma4_config() -> ParserEngineConfig:
         },
         arg_converter=_gemma4_arg_converter,
         tool_args_json=False,
-        arg_structural_chars=frozenset(",:{}[]<"),
+        arg_structural_chars=frozenset(",:={}[]<'\""),
         drop_tokens=frozenset(_GEMMA4_MODEL_DROP_TOKENS - used_tokens),
     )
 
