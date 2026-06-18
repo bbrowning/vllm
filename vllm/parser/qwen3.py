@@ -142,6 +142,10 @@ def qwen3_config(thinking: bool = True) -> ParserEngineConfig:
                 ParserState.TOOL_BETWEEN,
                 (EventType.TOOL_CALL_END,),
             ),
+            (ParserState.TOOL_ARGS, "TOOL_END"): Transition(
+                ParserState.CONTENT,
+                (EventType.TOOL_CALL_END,),
+            ),
             (ParserState.TOOL_BETWEEN, "TOOL_END"): Transition(
                 ParserState.CONTENT,
                 (),

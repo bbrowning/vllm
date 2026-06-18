@@ -572,6 +572,39 @@ class TestStreaming:
         assert "Read" in names
 
 
+class TestMissingFunctionEnd:
+    def test_non_streaming(self, parser, mock_request):
+        text = (
+            "<tool_call>\n"
+            "<function=get_weather>\n"
+            "<parameter=city>Tokyo</parameter>\n"
+            "</tool_call>"
+        )
+        result = parser.extract_tool_calls(text, mock_request)
+
+        assert result.tools_called is True
+        assert len(result.tool_calls) == 1
+        assert result.tool_calls[0].function.name == "get_weather"
+        args = json.loads(result.tool_calls[0].function.arguments)
+        assert args == {"city": "Tokyo"}
+
+    def test_streaming_with_trailing_content(self, parser, mock_request):
+        chunks = [
+            "<tool_call>\n",
+            "<function=get_weather>\n",
+            "<parameter=city>Tokyo</parameter>\n",
+            "</tool_call>",
+            "Done.",
+        ]
+
+        results = simulate_tool_streaming(parser, mock_request, chunks)
+
+        assert collect_function_name(results) == "get_weather"
+        args = json.loads(collect_tool_arguments(results))
+        assert args == {"city": "Tokyo"}
+        assert "Done." in collect_content(results)
+
+
 class TestArgConverter:
     """Direct tests for the Qwen3 arg_converter with multi-line values."""
 

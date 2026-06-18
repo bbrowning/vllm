@@ -127,6 +127,10 @@ def minimax_m2_config() -> ParserEngineConfig:
                 ParserState.TOOL_BETWEEN,
                 (EventType.TOOL_CALL_END,),
             ),
+            (ParserState.TOOL_ARGS, "TOOL_END"): Transition(
+                ParserState.CONTENT,
+                (EventType.TOOL_CALL_END,),
+            ),
             **{
                 (state, terminal): Transition(
                     ParserState.TOOL_NAME,

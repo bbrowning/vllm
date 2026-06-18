@@ -7,6 +7,7 @@ import pytest
 
 from tests.parser.engine.conftest import make_mock_tokenizer
 from tests.parser.engine.streaming_helpers import (
+    collect_content,
     collect_function_name,
     collect_tool_arguments,
     simulate_tool_streaming,
@@ -236,6 +237,44 @@ class TestStreaming:
 
         assert collect_function_name(results) is None
         assert collect_tool_arguments(results) == ""
+
+
+class TestMissingInvokeEnd:
+    def test_non_streaming(self, parser, mock_request):
+        result = parser.extract_tool_calls(
+            '<minimax:tool_call><invoke name="get_weather">'
+            '<parameter name="city">Seattle</parameter>'
+            "</minimax:tool_call>",
+            mock_request,
+        )
+
+        assert result.tools_called is True
+        assert len(result.tool_calls) == 1
+        assert result.tool_calls[0].function.name == "get_weather"
+        assert json.loads(result.tool_calls[0].function.arguments) == {
+            "city": "Seattle",
+        }
+
+    def test_streaming_with_trailing_content(self, parser, mock_request):
+        results = simulate_tool_streaming(
+            parser,
+            mock_request,
+            [
+                "<minimax:tool_call>",
+                '<invoke name="get_weather">',
+                '<parameter name="city">Seattle</parameter>',
+                "</minimax:tool_call>",
+                "Done.",
+            ],
+        )
+
+        assert collect_function_name(results) == "get_weather"
+        assert json.loads(collect_tool_arguments(results)) == {
+            "city": "Seattle",
+        }
+
+        content = collect_content(results)
+        assert "Done." in content
 
 
 class TestReasoning:
