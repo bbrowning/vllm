@@ -272,6 +272,33 @@ def replay_with_text_holdback(
     return results
 
 
+def replay_non_streaming(
+    parser,
+    tokens: list[tuple[int, str]],
+    tools: list[dict] | None = None,
+    prompt_token_ids: list[int] | None = None,
+) -> ParseOutput:
+    """Run ``parser.parse()`` on the full text assembled from *tokens*.
+
+    This is the non-streaming counterpart of :func:`replay_streaming`.
+    """
+    full_text = "".join(text for _, text in tokens)
+    all_ids = [tid for tid, _ in tokens]
+    request = _test_request(tools=tools)
+    reasoning, content, tool_calls = parser.parse(
+        full_text,
+        request,
+        model_output_token_ids=all_ids,
+    )
+    return ParseOutput(
+        reasoning=reasoning or "",
+        content=content or "",
+        tool_calls=[
+            {"name": fc.name, "arguments": fc.arguments} for fc in (tool_calls or [])
+        ],
+    )
+
+
 def accumulate_deltas(
     deltas: Sequence[DeltaMessage | None],
 ) -> dict:
