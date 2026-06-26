@@ -438,7 +438,7 @@ def _run_scaling_mode(
     """Run a scaling test for a single mode."""
     replay_fn = _make_replay_fn(mode, chunk_size=1)
     base_token_count = len(sample.tokens)
-    multipliers = [1, 2, 4, 8, 16]
+    multipliers = [1, 2, 4, 8, 16, 32]
 
     print()
     print("=" * 70)
