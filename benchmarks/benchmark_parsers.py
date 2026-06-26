@@ -458,7 +458,7 @@ def _run_scaling_mode(
     print(f"  {'-' * 5}  {'-' * 7}  {'-' * 12}  {'-' * 8}  {'-' * 16}")
 
     prev_median: float | None = None
-    prev_mult: int | None = None
+    prev_token_count: int | None = None
 
     for mult in multipliers:
         if model:
@@ -486,12 +486,13 @@ def _run_scaling_mode(
         )
         median = statistics.median(raw.total) * 1e6
 
-        if prev_median is not None and prev_mult is not None:
+        curr_token_count = len(scaled_sample.tokens)
+        if prev_median is not None and prev_token_count is not None:
             ratio = median / prev_median
-            token_ratio = mult / prev_mult
-            prev_n = base_token_count * prev_mult
-            curr_n = base_token_count * mult
-            expected_nlogn = token_ratio * math.log2(curr_n) / math.log2(prev_n)
+            token_ratio = curr_token_count / prev_token_count
+            expected_nlogn = (
+                token_ratio * math.log2(curr_token_count) / math.log2(prev_token_count)
+            )
             expected_quadratic = token_ratio * token_ratio
             boundary_low = math.sqrt(token_ratio * expected_nlogn)
             boundary_high = math.sqrt(expected_nlogn * expected_quadratic)
@@ -507,12 +508,12 @@ def _run_scaling_mode(
             hint = ""
 
         print(
-            f"  {mult:>5}  {len(scaled_sample.tokens):>7}  "
+            f"  {mult:>5}  {curr_token_count:>7}  "
             f"{median:>12.1f}  {ratio_str:>8}  {hint:>16}"
         )
 
         prev_median = median
-        prev_mult = mult
+        prev_token_count = curr_token_count
 
     print()
 
