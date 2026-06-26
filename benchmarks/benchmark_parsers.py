@@ -432,7 +432,7 @@ def _run_scaling_mode(
     sample: Sample,
     iterations: int,
     warmup: int,
-    model: str | None,
+    model: str,
     mode: str,
 ) -> None:
     """Run a scaling test for a single mode."""
@@ -447,8 +447,6 @@ def _run_scaling_mode(
     print(f"Base sample: {sample.id} ({base_token_count} tokens)")
     print(f"Multipliers: {multipliers}")
     print(f"Iterations: {iterations}, Warmup: {warmup}")
-    if model:
-        print("Using trace-builder generated scaling samples")
     print()
 
     print(
@@ -461,21 +459,7 @@ def _run_scaling_mode(
     prev_token_count: int | None = None
 
     for mult in multipliers:
-        if model:
-            scaled_sample = _build_scaling_sample(model, base_token_count * mult)
-        else:
-            scaled_tokens = sample.tokens * mult
-            scaled_sample = Sample(
-                id=f"{sample.id}-x{mult}",
-                description=f"Scaled {mult}x",
-                source="benchmark",
-                vocab=sample.vocab,
-                tokens=scaled_tokens,
-                expected_reasoning=None,
-                expected_content=None,
-                expected_tool_calls=None,
-                tools=sample.tools,
-            )
+        scaled_sample = _build_scaling_sample(model, base_token_count * mult)
 
         raw = time_sample(
             factory,
@@ -525,7 +509,7 @@ def run_scaling(
     iterations: int,
     warmup: int,
     scaling_sample_id: str | None,
-    model: str | None = None,
+    model: str,
     mode: str = "streaming",
 ) -> None:
     if scaling_sample_id:
