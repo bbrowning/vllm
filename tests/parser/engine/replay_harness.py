@@ -288,6 +288,7 @@ def replay_non_streaming(
     reasoning, content, tool_calls = parser.parse(
         full_text,
         request,
+        enable_auto_tools=bool(tools),
         model_output_token_ids=all_ids,
     )
     return ParseOutput(
