@@ -196,6 +196,8 @@ def minimax_m2_config() -> ParserEngineConfig:
 class MinimaxM2Parser(ParserEngine):
     """MiniMax M2 parser backed by the declarative parser engine."""
 
+    structural_tag_model = "minimax"
+
     def __init__(self, tokenizer, tools=None, **kwargs) -> None:
         kwargs.setdefault("parser_engine_config", minimax_m2_config())
         super().__init__(tokenizer, tools, **kwargs)

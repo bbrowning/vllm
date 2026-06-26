@@ -2,7 +2,8 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 from vllm.parser.engine.registered_adapters import SeedOssParserToolAdapter
+from vllm.parser.seed_oss import SeedOssParser
 
 
 class SeedOssEngineToolParser(SeedOssParserToolAdapter):  # type: ignore[valid-type, misc]
-    structural_tag_model = None
+    structural_tag_model = SeedOssParser.structural_tag_model

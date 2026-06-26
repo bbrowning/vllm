@@ -175,6 +175,8 @@ def glm47_moe_config(thinking: bool = True) -> ParserEngineConfig:
 class Glm47MoeParser(ParserEngine):
     """GLM-4.7 parser backed by the declarative parser engine."""
 
+    structural_tag_model = "glm_4_7"
+
     def __init__(
         self,
         tokenizer: TokenizerLike,

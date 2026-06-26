@@ -22,6 +22,7 @@ from vllm.parser.qwen3 import Qwen3Parser
 
 class SeedOssParser(Qwen3Parser):
     CONFIG_NAME = "seed_oss"
+    structural_tag_model = None
     THINK_START = "<seed:think>"
     THINK_END = "</seed:think>"
     TOOL_START = "<seed:tool_call>"

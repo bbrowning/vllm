@@ -83,6 +83,8 @@ class ParserEngine(Parser):
     complete output format for a model (reasoning + tool calls).
     """
 
+    structural_tag_model: str | None = None
+
     def __init__(
         self,
         tokenizer: TokenizerLike,

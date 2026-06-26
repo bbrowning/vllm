@@ -202,6 +202,7 @@ class Qwen3Parser(ParserEngine):
     """
 
     CONFIG_NAME = "qwen3"
+    structural_tag_model: str | None = "qwen_3_coder"
     THINK_START = THINK_START
     THINK_END = THINK_END
     TOOL_START = TOOL_CALL_START

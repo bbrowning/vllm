@@ -125,6 +125,10 @@ class ParserManager:
             MistralParser.tool_parser_cls = tool_parser_cls
             return MistralParser
 
+        engine_parser = cls._try_pair_detection(reasoning_parser_cls, tool_parser_cls)
+        if engine_parser is not None:
+            return engine_parser
+
         from vllm.parser.abstract_parser import DelegatingParser
 
         r_cls = reasoning_parser_cls
@@ -135,3 +139,47 @@ class ParserManager:
             tool_parser_cls = t_cls
 
         return _Parser
+
+    @classmethod
+    def _try_pair_detection(
+        cls,
+        reasoning_parser_cls: type[ReasoningParser] | None,
+        tool_parser_cls: type[ToolParser] | None,
+    ) -> type[Parser] | None:
+        """Return a ParserEngine subclass when both adapters wrap
+        the same (or related) engine, avoiding a redundant
+        DelegatingParser + two adapter instances."""
+        if reasoning_parser_cls is None or tool_parser_cls is None:
+            return None
+
+        r_engine = getattr(reasoning_parser_cls, "_parser_engine_cls", None)
+        t_engine = getattr(tool_parser_cls, "_parser_engine_cls", None)
+        if r_engine is None or t_engine is None:
+            return None
+
+        if r_engine is t_engine or issubclass(r_engine, t_engine):
+            engine_cls = r_engine
+        elif issubclass(t_engine, r_engine):
+            engine_cls = t_engine
+        else:
+            return None
+
+        def _paired_adjust_request(self, request):  # type: ignore[no-untyped-def]
+            from vllm.parser.engine.parser_engine import ParserEngine
+
+            request = ParserEngine.adjust_request(self, request)
+            if self._tools:
+                from vllm.parser.utils import apply_structural_tag
+
+                apply_structural_tag(request, self.structural_tag_model)
+            return request
+
+        return type(
+            f"_{engine_cls.__name__}Paired",
+            (engine_cls,),
+            {
+                "reasoning_parser_cls": reasoning_parser_cls,
+                "tool_parser_cls": tool_parser_cls,
+                "adjust_request": _paired_adjust_request,
+            },
+        )
