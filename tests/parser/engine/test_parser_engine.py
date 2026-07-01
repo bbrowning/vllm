@@ -8,6 +8,7 @@ DeltaMessage / ExtractedToolCallInformation protocol.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -21,13 +22,18 @@ from vllm.entrypoints.openai.chat_completion.protocol import (
 )
 from vllm.entrypoints.openai.engine.protocol import (
     DeltaFunctionCall,
+    DeltaMessage,
     DeltaToolCall,
     FunctionDefinition,
 )
 from vllm.parser.abstract_parser import DelegatingParser
 from vllm.parser.engine.adapters import make_adapters
 from vllm.parser.engine.events import EventType, SemanticEvent
-from vllm.parser.engine.parser_engine import ParserEngine
+from vllm.parser.engine.parser_engine import (
+    ParserEngine,
+    _coalesce_tool_call_deltas,
+    _merge_deltas,
+)
 from vllm.parser.engine.parser_engine_config import (
     ParserEngineConfig,
     ParserState,
@@ -285,12 +291,166 @@ class TestEventsToDelta:
         assert delta.tool_calls[0].function.name == "get_weather"
         assert delta.tool_calls[0].id is not None
 
+    def test_whitespace_content_preserved_when_events_split_across_two_calls(
+        self,
+    ):
+        """Split processing (two _events_to_delta calls) must preserve
+        whitespace-only content the same way combined processing does.
+        """
+        config = ParserEngineConfig(
+            name="no_ws_drop_test",
+            terminals=_hermes_config().terminals,
+            token_id_terminals=_hermes_config().token_id_terminals,
+            transitions=_hermes_config().transitions,
+            content_events=_hermes_config().content_events,
+            drop_whitespace_only_content_before_tools=False,
+        )
+        engine = _make_engine(config)
+        engine._streaming_initialized = True
+
+        feed_events = [
+            SemanticEvent(EventType.TEXT_CHUNK, value="\n", tool_index=-1),
+        ]
+        finish_events = [
+            SemanticEvent(EventType.TOOL_CALL_START, tool_index=0),
+            SemanticEvent(EventType.TOOL_NAME, "get_weather", tool_index=0),
+            SemanticEvent(
+                EventType.ARG_VALUE_CHUNK,
+                '{"city": "NYC"}',
+                tool_index=0,
+            ),
+            SemanticEvent(EventType.TOOL_CALL_END, tool_index=0),
+        ]
+
+        combined = list(feed_events) + list(finish_events)
+        combined_delta = engine._events_to_delta(combined, finished=True)
+        combined_content = combined_delta.content if combined_delta else None
+        combined_deferred = engine._deferred_content
+
+        engine._tool_slots.clear()
+        engine._deferred_content = ""
+        engine._content_has_nonws = False
+
+        feed_delta = engine._events_to_delta(feed_events)
+        finish_delta = engine._events_to_delta(finish_events, finished=True)
+        result = _merge_deltas(feed_delta, finish_delta)
+        split_content = result.content if result else None
+        split_deferred = engine._deferred_content
+
+        assert combined_content == "\n", (
+            f"Combined processing should keep whitespace, "
+            f"got content={combined_content!r}"
+        )
+        assert combined_deferred == "", (
+            "Combined processing should not leave deferred content"
+        )
+
+        assert split_content == "\n", (
+            f"Split processing should keep whitespace, got content={split_content!r}"
+        )
+        assert split_deferred == "", (
+            f"Split processing should not leave deferred content, "
+            f"got {split_deferred!r}"
+        )
+
+
+# ── TestMergeDeltas ────────────────────────────────────────────────
+
+
+class TestMergeDeltas:
+    """Unit tests for _merge_deltas cross-batch tool-call coalescing."""
+
+    def test_same_index_coalesced_across_batches(self):
+        feed_delta = DeltaMessage(
+            tool_calls=[
+                DeltaToolCall(
+                    index=0,
+                    id="call_1",
+                    type="function",
+                    function=DeltaFunctionCall(
+                        name="get_weather",
+                        arguments='{"city": "NYC"',
+                    ),
+                ),
+            ],
+        )
+        finish_delta = DeltaMessage(
+            tool_calls=[
+                DeltaToolCall(
+                    index=0,
+                    function=DeltaFunctionCall(arguments="}"),
+                ),
+            ],
+        )
+        result = _merge_deltas(feed_delta, finish_delta)
+        assert result is not None
+        assert len(result.tool_calls) == 1
+        tc = result.tool_calls[0]
+        assert tc.index == 0
+        assert tc.id == "call_1"
+        assert tc.function.name == "get_weather"
+        assert tc.function.arguments == '{"city": "NYC"}'
+
+    def test_different_indices_preserved(self):
+        a = DeltaMessage(
+            tool_calls=[
+                DeltaToolCall(
+                    index=0,
+                    id="call_1",
+                    type="function",
+                    function=DeltaFunctionCall(name="f1", arguments='{"a":1}'),
+                ),
+            ],
+        )
+        b = DeltaMessage(
+            tool_calls=[
+                DeltaToolCall(
+                    index=1,
+                    id="call_2",
+                    type="function",
+                    function=DeltaFunctionCall(name="f2", arguments='{"b":2}'),
+                ),
+            ],
+        )
+        result = _merge_deltas(a, b)
+        assert result is not None
+        assert len(result.tool_calls) == 2
+
+    def test_none_passthrough(self):
+        d = DeltaMessage(content="hello")
+        assert _merge_deltas(None, d) is d
+        assert _merge_deltas(d, None) is d
+        assert _merge_deltas(None, None) is None
+
+    def test_role_preserved(self):
+        a = DeltaMessage(role="assistant", content="hello ")
+        b = DeltaMessage(content="world")
+        result = _merge_deltas(a, b)
+        assert result is not None
+        assert result.role == "assistant"
+        assert result.content == "hello world"
+
+    def test_role_from_second_delta(self):
+        a = DeltaMessage(content="hello ")
+        b = DeltaMessage(role="assistant", content="world")
+        result = _merge_deltas(a, b)
+        assert result is not None
+        assert result.role == "assistant"
+
+    def test_role_only_delta(self):
+        a = DeltaMessage(role="assistant")
+        b = DeltaMessage(content="hello")
+        result = _merge_deltas(a, b)
+        assert result is not None
+        assert result.role == "assistant"
+        assert result.content == "hello"
+
 
 # ── TestCoalesceToolCallDeltas ──────────────────────────────────────
 
 
 class TestCoalesceToolCallDeltas:
-    """Unit tests for ParserEngine._coalesce_tool_call_deltas()."""
+    """Unit tests for _coalesce_tool_call_deltas()."""
 
     def test_no_duplicates_unchanged(self):
         deltas = [
@@ -305,7 +465,7 @@ class TestCoalesceToolCallDeltas:
                 function=DeltaFunctionCall(arguments="{}"),
             ),
         ]
-        result = ParserEngine._coalesce_tool_call_deltas(deltas)
+        result = _coalesce_tool_call_deltas(deltas)
         assert len(result) == 2
         assert result[0].index == 0
         assert result[1].index == 1
@@ -327,7 +487,7 @@ class TestCoalesceToolCallDeltas:
                 function=DeltaFunctionCall(arguments='"Tokyo"}'),
             ),
         ]
-        result = ParserEngine._coalesce_tool_call_deltas(deltas)
+        result = _coalesce_tool_call_deltas(deltas)
         assert len(result) == 1
         assert result[0].index == 0
         assert result[0].id == "call_1"
@@ -336,14 +496,14 @@ class TestCoalesceToolCallDeltas:
         assert result[0].function.arguments == '{"city":"Tokyo"}'
 
     def test_empty_list(self):
-        assert ParserEngine._coalesce_tool_call_deltas([]) == []
+        assert _coalesce_tool_call_deltas([]) == []
 
     def test_single_element(self):
         tc = DeltaToolCall(
             index=0,
             function=DeltaFunctionCall(name="f"),
         )
-        result = ParserEngine._coalesce_tool_call_deltas([tc])
+        result = _coalesce_tool_call_deltas([tc])
         assert result == [tc]
 
     def test_partial_duplicates(self):
@@ -365,7 +525,7 @@ class TestCoalesceToolCallDeltas:
                 function=DeltaFunctionCall(arguments='{"x":1}'),
             ),
         ]
-        result = ParserEngine._coalesce_tool_call_deltas(deltas)
+        result = _coalesce_tool_call_deltas(deltas)
         assert len(result) == 2
         assert result[0].index == 0
         assert result[0].function.name == "f1"
@@ -385,7 +545,7 @@ class TestCoalesceToolCallDeltas:
                 function=DeltaFunctionCall(name="f"),
             ),
         ]
-        result = ParserEngine._coalesce_tool_call_deltas(deltas)
+        result = _coalesce_tool_call_deltas(deltas)
         assert len(result) == 1
         assert result[0].id == "call_1"
         assert result[0].type == "function"
@@ -508,7 +668,9 @@ class TestPostToolContentDeferral:
         assert deferred.content == "\nHere is the result"
         assert not deferred.tool_calls
 
-    def test_text_after_tool_deferred_even_when_finished(self):
+    def test_text_after_tool_flushed_when_finished(self):
+        """Content after a tool call must be flushed when finished=True —
+        there is no future _events_to_delta call to pick it up."""
         engine = _make_engine()
         events = [
             SemanticEvent(EventType.TOOL_CALL_START, tool_index=0),
@@ -520,7 +682,8 @@ class TestPostToolContentDeferral:
         delta = engine._events_to_delta(events, finished=True)
         assert delta is not None
         assert delta.tool_calls
-        assert delta.content is None
+        assert delta.content == "done"
+        assert engine._deferred_content == ""
 
     def test_text_before_tool_not_deferred(self):
         engine = _make_engine()
@@ -809,6 +972,30 @@ class TestEngineBasedPath:
         )
         assert result is not None
         assert len(result.tool_calls) > 0
+
+    def test_parse_delta_finished_coalesces_cross_batch(self, mock_request):
+        """Final parse_delta(finished=True) must not duplicate tool-call
+        indices when feed and finish each emit a DeltaToolCall for the
+        same index (e.g. held-back closing brace flushed by finish)."""
+        engine = _make_engine(_hermes_config())
+        engine._streaming_initialized = True
+        engine.parse_delta(
+            '<tool_call>{"name": "get_weather", "arguments": {"city": "NYC"',
+            [],
+            mock_request,
+            finished=False,
+        )
+        result = engine.parse_delta(
+            "}}</tool_call>",
+            [],
+            mock_request,
+            finished=True,
+        )
+        assert result is not None
+        indices = [tc.index for tc in result.tool_calls]
+        assert len(indices) == len(set(indices)), (
+            f"Duplicate indices in final chunk: {result.tool_calls}"
+        )
 
 
 # ── TestParseTokenIdPassthrough ────────────────────────────────────
@@ -1671,3 +1858,147 @@ class TestDropSpecialTokens:
             e.value for e in events if e.type == EventType.REASONING_CHUNK
         )
         assert "<bos>" not in reasoning_text
+
+
+def _qwen3_like_preamble_config() -> ParserEngineConfig:
+    return ParserEngineConfig(
+        name="qwen3_recovery",
+        terminals={
+            "TOOL_START": "<tool_call>",
+            "TOOL_END": "</tool_call>",
+            "FUNC_PREFIX": "<function=",
+            "FUNC_END": "</function>",
+            "CLOSE_ANGLE": ">",
+        },
+        token_id_terminals={
+            "TOOL_START": "<tool_call>",
+            "TOOL_END": "</tool_call>",
+        },
+        transitions={
+            (ParserState.CONTENT, "TOOL_START"): Transition(
+                ParserState.TOOL_PREAMBLE,
+                (EventType.TOOL_CALL_START,),
+            ),
+            (ParserState.TOOL_PREAMBLE, "TOOL_END"): Transition(
+                ParserState.CONTENT,
+                (EventType.TOOL_CALL_END,),
+            ),
+            (ParserState.TOOL_PREAMBLE, "FUNC_PREFIX"): Transition(
+                ParserState.TOOL_NAME,
+                (),
+            ),
+            (ParserState.TOOL_NAME, "CLOSE_ANGLE"): Transition(
+                ParserState.TOOL_ARGS,
+                (),
+            ),
+            (ParserState.TOOL_ARGS, "FUNC_END"): Transition(
+                ParserState.TOOL_BETWEEN,
+                (EventType.TOOL_CALL_END,),
+            ),
+            (ParserState.TOOL_BETWEEN, "TOOL_END"): Transition(
+                ParserState.CONTENT,
+                (),
+            ),
+        },
+        content_events={
+            ParserState.CONTENT: EventType.TEXT_CHUNK,
+            ParserState.TOOL_NAME: EventType.TOOL_NAME,
+            ParserState.TOOL_ARGS: EventType.ARG_VALUE_CHUNK,
+        },
+    )
+
+
+def _qwen3_preamble_in_content_config() -> ParserEngineConfig:
+    """Variant that (incorrectly) maps TOOL_PREAMBLE in content_events."""
+    base = _qwen3_like_preamble_config()
+    return replace(
+        base,
+        content_events={
+            **base.content_events,
+            ParserState.TOOL_PREAMBLE: EventType.TEXT_CHUNK,
+        },
+    )
+
+
+def _collect_deltas(engine, chunks, mock_request):
+    deltas = []
+    for chunk in chunks:
+        d = engine.parse_delta(chunk, [], mock_request, finished=False)
+        if d is not None:
+            deltas.append(d)
+    d = engine.parse_delta("", [], mock_request, finished=True)
+    if d is not None:
+        deltas.append(d)
+    return deltas
+
+
+class TestUnclosedToolTagRecovery:
+    """False-positive <tool_call> in model content must be recovered as
+    content when the stream ends without a closing tool structure."""
+
+    def test_unclosed_tool_tag_recovered_in_delta(self, mock_request):
+        engine = _make_engine(_qwen3_like_preamble_config())
+        deltas = _collect_deltas(
+            engine, ["Here is how ", "<tool_call>", " works."], mock_request
+        )
+
+        full_content = "".join(d.content for d in deltas if d.content is not None)
+        assert "Here is how " in full_content
+        assert "<tool_call>" in full_content
+        assert " works." in full_content
+
+        all_tool_calls = [tc for d in deltas if d.tool_calls for tc in d.tool_calls]
+        assert len(all_tool_calls) == 0
+
+    def test_parse_false_positive_content_order(self, mock_request):
+        """Non-streaming parse() must return content in the correct order
+        when a false-positive <tool_call> appears mid-sentence."""
+        engine = _make_engine(_qwen3_like_preamble_config())
+        text = "Before <tool_call> After"
+
+        _, content, tool_calls = engine.parse(text, mock_request)
+
+        assert content is not None
+        assert "Before " in content
+        assert "<tool_call>" in content
+        assert " After" in content
+        before_idx = content.index("Before ")
+        after_idx = content.index(" After")
+        assert before_idx < after_idx
+        assert tool_calls is None
+
+    def test_preamble_in_content_events_still_recovers_streaming(self, mock_request):
+        """Recovery must work even if TOOL_PREAMBLE is mapped in
+        content_events — the engine must buffer regardless."""
+        engine = _make_engine(_qwen3_preamble_in_content_config())
+        deltas = _collect_deltas(
+            engine, ["Here is how ", "<tool_call>", " works."], mock_request
+        )
+
+        full_content = "".join(d.content for d in deltas if d.content is not None)
+        assert "Here is how " in full_content
+        assert "<tool_call>" in full_content
+        assert " works." in full_content
+
+        assert full_content.index("<tool_call>") < full_content.index(" works.")
+
+        all_tool_calls = [tc for d in deltas if d.tool_calls for tc in d.tool_calls]
+        assert len(all_tool_calls) == 0
+
+    def test_preamble_in_content_events_parse_order(self, mock_request):
+        """Non-streaming parse() must preserve content order even when
+        TOOL_PREAMBLE is in content_events."""
+        engine = _make_engine(_qwen3_preamble_in_content_config())
+        text = "Before <tool_call> After"
+
+        _, content, tool_calls = engine.parse(text, mock_request)
+
+        assert content is not None
+        assert "Before " in content
+        assert "<tool_call>" in content
+        assert " After" in content
+        before_idx = content.index("Before ")
+        tag_idx = content.index("<tool_call>")
+        after_idx = content.index(" After")
+        assert before_idx < tag_idx < after_idx
+        assert tool_calls is None

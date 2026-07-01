@@ -844,3 +844,282 @@ class TestSkipToolParsing:
         engine.skip_tool_parsing = True
         engine.reset()
         assert engine.skip_tool_parsing is True
+
+
+class TestUnclosedToolTagRecovery:
+    """When <tool_call> appears in model content as literal text (false
+    positive), the parser enters TOOL_PREAMBLE and subsequent content is
+    dropped.  finish() must recover the consumed text as content."""
+
+    @staticmethod
+    def _qwen3_like_config() -> ParserEngineConfig:
+        return ParserEngineConfig(
+            name="qwen3_recovery_test",
+            terminals={
+                "TOOL_START": "<tool_call>",
+                "TOOL_END": "</tool_call>",
+                "FUNC_PREFIX": "<function=",
+                "FUNC_END": "</function>",
+                "CLOSE_ANGLE": ">",
+            },
+            transitions={
+                (ParserState.CONTENT, "TOOL_START"): Transition(
+                    ParserState.TOOL_PREAMBLE,
+                    (EventType.TOOL_CALL_START,),
+                ),
+                (ParserState.TOOL_PREAMBLE, "TOOL_END"): Transition(
+                    ParserState.CONTENT,
+                    (EventType.TOOL_CALL_END,),
+                ),
+                (ParserState.TOOL_PREAMBLE, "FUNC_PREFIX"): Transition(
+                    ParserState.TOOL_NAME,
+                    (),
+                ),
+                (ParserState.TOOL_NAME, "CLOSE_ANGLE"): Transition(
+                    ParserState.TOOL_ARGS,
+                    (),
+                ),
+                (ParserState.TOOL_ARGS, "FUNC_END"): Transition(
+                    ParserState.TOOL_BETWEEN,
+                    (EventType.TOOL_CALL_END,),
+                ),
+                (ParserState.TOOL_BETWEEN, "TOOL_END"): Transition(
+                    ParserState.CONTENT,
+                    (),
+                ),
+            },
+            content_events={
+                ParserState.CONTENT: EventType.TEXT_CHUNK,
+                ParserState.TOOL_NAME: EventType.TOOL_NAME,
+                ParserState.TOOL_ARGS: EventType.ARG_VALUE_CHUNK,
+            },
+        )
+
+    def test_finish_recovers_content_after_false_positive_tool_tag(self):
+        engine = StreamingParserEngine(self._qwen3_like_config(), tokenizer=None)
+
+        events = engine.feed("Here is how ", [])
+        events.extend(engine.feed("<tool_call>", []))
+        assert engine.state == ParserState.TOOL_PREAMBLE
+
+        events.extend(engine.feed(" works in the parser.", []))
+        events.extend(engine.finish())
+
+        content = "".join(e.value for e in events if e.type == EventType.TEXT_CHUNK)
+        assert "Here is how " in content
+        assert "<tool_call>" in content
+        assert " works in the parser." in content
+
+    def test_finish_recovers_content_streaming_char_by_char(self):
+        engine = StreamingParserEngine(self._qwen3_like_config(), tokenizer=None)
+        text = "Explaining <tool_call> syntax to the user."
+        all_events: list[SemanticEvent] = []
+        for ch in text:
+            all_events.extend(engine.feed(ch, []))
+        all_events.extend(engine.finish())
+
+        content = "".join(e.value for e in all_events if e.type == EventType.TEXT_CHUNK)
+        assert content == text
+
+    def test_real_tool_call_no_recovery(self):
+        """A completed tool call should NOT leak recovery text into content."""
+        engine = StreamingParserEngine(self._qwen3_like_config(), tokenizer=None)
+        text = (
+            "<tool_call><function=read>"
+            "<parameter=path>/tmp</parameter>"
+            "</function></tool_call>"
+        )
+        events = engine.parse_complete(text)
+
+        content = "".join(e.value for e in events if e.type == EventType.TEXT_CHUNK)
+        assert content == ""
+
+        tool_starts = [e for e in events if e.type == EventType.TOOL_CALL_START]
+        tool_ends = [e for e in events if e.type == EventType.TOOL_CALL_END]
+        assert len(tool_starts) == 1
+        assert len(tool_ends) == 1
+
+    def test_empty_tool_block_still_works(self):
+        """Empty tool block <tool_call></tool_call> should not trigger recovery."""
+        engine = StreamingParserEngine(self._qwen3_like_config(), tokenizer=None)
+        text = "Before <tool_call></tool_call> After"
+        events = engine.parse_complete(text)
+
+        content = "".join(e.value for e in events if e.type == EventType.TEXT_CHUNK)
+        assert "Before " in content
+        assert " After" in content
+        assert "<tool_call>" not in content
+
+    def test_recovery_buffer_cleared_on_normal_completion(self):
+        engine = StreamingParserEngine(self._qwen3_like_config(), tokenizer=None)
+        engine.feed("<tool_call>", [])
+        assert engine.state == ParserState.TOOL_PREAMBLE
+        assert len(engine._recovery_buffer) > 0
+
+        engine.feed("<function=f>args</function></tool_call>", [])
+        assert engine.state == ParserState.CONTENT
+        assert len(engine._recovery_buffer) == 0
+
+    def test_no_recovery_in_tool_name_state(self):
+        """Truncation in TOOL_NAME is a legitimate partial tool call,
+        not a false positive — recovery buffer must NOT emit as content."""
+        engine = StreamingParserEngine(self._qwen3_like_config(), tokenizer=None)
+        engine.feed("<tool_call><function=partial_na", [])
+        assert engine.state == ParserState.TOOL_NAME
+
+        events = engine.finish()
+        text_events = [e for e in events if e.type == EventType.TEXT_CHUNK]
+        assert len(text_events) == 0
+
+    def test_no_recovery_in_tool_args_state(self):
+        """Truncation in TOOL_ARGS (e.g. max_tokens) is a legitimate
+        partial tool call — recovery buffer must NOT emit as content."""
+        engine = StreamingParserEngine(self._qwen3_like_config(), tokenizer=None)
+        engine.feed('<tool_call><function=foo>{"key": "val', [])
+        assert engine.state == ParserState.TOOL_ARGS
+
+        events = engine.finish()
+        text_events = [e for e in events if e.type == EventType.TEXT_CHUNK]
+        assert len(text_events) == 0
+        end_events = [e for e in events if e.type == EventType.TOOL_CALL_END]
+        assert len(end_events) == 1
+
+    def test_finish_recovers_buffer_in_tool_between_state(self):
+        """Truncation in TOOL_BETWEEN (after one tool call ends but before
+        the closing wrapper) should recover any buffered text as content."""
+        engine = StreamingParserEngine(self._qwen3_like_config(), tokenizer=None)
+        engine.feed("<tool_call><function=foo>{}</function>", [])
+        assert engine.state == ParserState.TOOL_BETWEEN
+
+        engine.feed("stray text", [])
+        assert engine._recovery_buffer == ["stray text"]
+
+        events = engine.finish()
+        text_events = [e for e in events if e.type == EventType.TEXT_CHUNK]
+        assert len(text_events) == 1
+        assert text_events[0].value == "stray text"
+
+
+class TestSectionWrappedRecoveryBuffer:
+    """Verify recovery buffer behavior with kimi_k2-style section-wrapped
+    tool calls, where TOOL_SECTION_END transitions to TOOL_PREAMBLE
+    (not CONTENT) to suppress trailing text.
+
+    This is the only parser pattern where finish() fires with state ==
+    TOOL_PREAMBLE after a *completed* tool call.  The recovery buffer
+    must be empty so finish() doesn't emit structural tokens as content.
+    """
+
+    @staticmethod
+    def _section_wrapped_config() -> ParserEngineConfig:
+        return ParserEngineConfig(
+            name="section_wrapped_test",
+            terminals={
+                "SECTION_START": "<|section_begin|>",
+                "SECTION_END": "<|section_end|>",
+                "TOOL_START": "<|tool_begin|>",
+                "TOOL_END": "<|tool_end|>",
+                "ARG_START": "<|arg_begin|>",
+            },
+            transitions={
+                (ParserState.CONTENT, "SECTION_START"): Transition(
+                    ParserState.TOOL_PREAMBLE,
+                    (),
+                ),
+                (ParserState.TOOL_PREAMBLE, "TOOL_START"): Transition(
+                    ParserState.TOOL_NAME,
+                    (EventType.TOOL_CALL_START,),
+                ),
+                (ParserState.TOOL_NAME, "ARG_START"): Transition(
+                    ParserState.TOOL_ARGS,
+                    (),
+                ),
+                (ParserState.TOOL_ARGS, "TOOL_END"): Transition(
+                    ParserState.TOOL_BETWEEN,
+                    (EventType.TOOL_CALL_END,),
+                ),
+                (ParserState.TOOL_BETWEEN, "TOOL_START"): Transition(
+                    ParserState.TOOL_NAME,
+                    (EventType.TOOL_CALL_START,),
+                ),
+                # Section-end stays in TOOL_PREAMBLE (suppresses trailing text)
+                (ParserState.TOOL_PREAMBLE, "SECTION_END"): Transition(
+                    ParserState.TOOL_PREAMBLE,
+                    (),
+                ),
+                (ParserState.TOOL_BETWEEN, "SECTION_END"): Transition(
+                    ParserState.TOOL_PREAMBLE,
+                    (),
+                ),
+            },
+            content_events={
+                ParserState.CONTENT: EventType.TEXT_CHUNK,
+                ParserState.TOOL_NAME: EventType.TOOL_NAME,
+                ParserState.TOOL_ARGS: EventType.ARG_VALUE_CHUNK,
+            },
+        )
+
+    def test_normal_completion_no_recovery(self):
+        """After a complete section-wrapped tool call, finish() must not
+        emit section terminal text as recovered content."""
+        engine = StreamingParserEngine(self._section_wrapped_config(), tokenizer=None)
+        engine.feed(
+            "<|section_begin|><|tool_begin|>func<|arg_begin|>"
+            '{"a":1}<|tool_end|><|section_end|>',
+            [],
+        )
+        assert engine.state == ParserState.TOOL_PREAMBLE
+        assert len(engine._recovery_buffer) == 0
+
+        events = engine.finish()
+        text_events = [e for e in events if e.type == EventType.TEXT_CHUNK]
+        assert text_events == []
+
+    def test_multi_tool_completion_no_recovery(self):
+        """Multiple tool calls within a section must not leak structural
+        tokens through the recovery buffer."""
+        engine = StreamingParserEngine(self._section_wrapped_config(), tokenizer=None)
+        engine.feed(
+            "<|section_begin|>"
+            "<|tool_begin|>f1<|arg_begin|>{}<|tool_end|>"
+            "<|tool_begin|>f2<|arg_begin|>{}<|tool_end|>"
+            "<|section_end|>",
+            [],
+        )
+        assert engine.state == ParserState.TOOL_PREAMBLE
+        assert len(engine._recovery_buffer) == 0
+
+        events = engine.finish()
+        text_events = [e for e in events if e.type == EventType.TEXT_CHUNK]
+        assert text_events == []
+
+        tool_starts = [e for e in events if e.type == EventType.TOOL_CALL_START]
+        assert len(tool_starts) == 0
+
+    def test_streaming_section_clears_buffer_at_each_transition(self):
+        """Feed tokens one terminal at a time and verify the buffer is
+        cleared on each tool-to-tool transition, not accumulated."""
+        engine = StreamingParserEngine(self._section_wrapped_config(), tokenizer=None)
+
+        engine.feed("<|section_begin|>", [])
+        assert engine.state == ParserState.TOOL_PREAMBLE
+        assert engine._recovery_buffer == ["<|section_begin|>"]
+
+        engine.feed("<|tool_begin|>", [])
+        assert engine.state == ParserState.TOOL_NAME
+        assert engine._recovery_buffer == []
+
+        engine.feed("func", [])
+        engine.feed("<|arg_begin|>", [])
+        engine.feed("{}", [])
+        engine.feed("<|tool_end|>", [])
+        assert engine.state == ParserState.TOOL_BETWEEN
+        assert engine._recovery_buffer == []
+
+        engine.feed("<|section_end|>", [])
+        assert engine.state == ParserState.TOOL_PREAMBLE
+        assert engine._recovery_buffer == []
+
+        events = engine.finish()
+        text_events = [e for e in events if e.type == EventType.TEXT_CHUNK]
+        assert text_events == []

@@ -76,6 +76,61 @@ class ToolCallSlot:
         self._args_joined = None
 
 
+def _coalesce_tool_call_deltas(
+    deltas: list[DeltaToolCall],
+) -> list[DeltaToolCall]:
+    """Merge entries that share the same index into one per index."""
+    merged: dict[int, DeltaToolCall] = {}
+    for tc in deltas:
+        existing = merged.get(tc.index)
+        if existing is None:
+            merged[tc.index] = tc
+            continue
+        if tc.id is not None and existing.id is None:
+            existing.id = tc.id
+        if tc.type is not None and existing.type is None:
+            existing.type = tc.type
+        if tc.function is not None:
+            if existing.function is None:
+                existing.function = tc.function
+            else:
+                if tc.function.name is not None and existing.function.name is None:
+                    existing.function.name = tc.function.name
+                if tc.function.arguments is not None:
+                    if existing.function.arguments is None:
+                        existing.function.arguments = tc.function.arguments
+                    else:
+                        existing.function.arguments += tc.function.arguments
+    if len(merged) == len(deltas):
+        return deltas
+    return list(merged.values())
+
+
+def _merge_deltas(
+    a: DeltaMessage | None, b: DeltaMessage | None
+) -> DeltaMessage | None:
+    if a is None:
+        return b
+    if b is None:
+        return a
+    kwargs: dict[str, object] = {}
+    role = a.role or b.role
+    if role:
+        kwargs["role"] = role
+    content = (a.content or "") + (b.content or "")
+    if content:
+        kwargs["content"] = content
+    reasoning = (a.reasoning or "") + (b.reasoning or "")
+    if reasoning:
+        kwargs["reasoning"] = reasoning
+    tool_calls = a.tool_calls + b.tool_calls
+    if len(tool_calls) > 1:
+        tool_calls = _coalesce_tool_call_deltas(tool_calls)
+    if tool_calls:
+        kwargs["tool_calls"] = tool_calls
+    return DeltaMessage(**kwargs) if kwargs else None
+
+
 class ParserEngine(Parser):
     """A :class:`Parser` backed by a single declarative engine config.
 
@@ -437,8 +492,12 @@ class ParserEngine(Parser):
         self._check_skip_tool_parsing(request)
         events = self._feed(delta_text, delta_token_ids)
         if finished:
-            events.extend(self._engine.finish())
-        result = self._events_to_delta(events, finished=finished)
+            finish_events = self._engine.finish()
+            feed_delta = self._events_to_delta(events)
+            finish_delta = self._events_to_delta(finish_events, finished=True)
+            result = _merge_deltas(feed_delta, finish_delta)
+        else:
+            result = self._events_to_delta(events)
         return self._strip_trailing_reasoning(result)
 
     def _strip_trailing_reasoning(
@@ -636,21 +695,25 @@ class ParserEngine(Parser):
     ) -> tuple[str | None, str | None, ExtractedToolCallInformation]:
         """Reset, feed, finish, and extract results in one pass.
 
-        Must be called as a unit — ``_events_to_delta`` populates tool
-        state that ``_build_extracted_result`` reads.
+        Feed and finish events are processed as separate batches so that
+        recovery content (emitted by ``finish()``) is not reordered by
+        the deferred-content logic in ``_events_to_delta``.
         """
         self._reset(initial_state=initial_state)
-        events = self._feed(text, token_ids)
-        events.extend(self._engine.finish())
+        feed_events = self._feed(text, token_ids)
+        finish_events = self._engine.finish()
 
-        delta = self._events_to_delta(events, finished=True)
-        tool_call_info = self._build_extracted_result()
+        feed_delta = self._events_to_delta(feed_events)
+        finish_delta = self._events_to_delta(finish_events, finished=True)
+        tool_call_info = self._build_extracted_result(feed_delta, finish_delta)
 
-        reasoning = delta.reasoning if delta else None
+        merged = _merge_deltas(feed_delta, finish_delta)
+
+        reasoning = merged.reasoning if merged else None
         if reasoning and self._strip_trailing_reasoning_ws:
             reasoning = reasoning.rstrip() or None
 
-        content = delta.content if delta else None
+        content = merged.content if merged else None
         if content:
             content = self._strip_content_whitespace(
                 content, tool_call_info.tools_called
@@ -694,7 +757,10 @@ class ParserEngine(Parser):
         events: list[SemanticEvent],
         finished: bool = False,
     ) -> DeltaMessage | None:
-        if not events and not self._deferred_content:
+        prior_deferred = self._deferred_content
+        self._deferred_content = ""
+
+        if not events and not prior_deferred:
             return None
 
         tool_call_deltas: list[DeltaToolCall] = []
@@ -734,10 +800,16 @@ class ParserEngine(Parser):
                     pass  # no delta-level effect
 
         if len(tool_call_deltas) > 1:
-            tool_call_deltas = self._coalesce_tool_call_deltas(tool_call_deltas)
+            tool_call_deltas = _coalesce_tool_call_deltas(tool_call_deltas)
 
-        if self._deferred_content and (not seen_tool_event or not tool_call_deltas):
-            content_parts.insert(0, self._deferred_content)
+        flush_deferred = finished or not seen_tool_event or not tool_call_deltas
+        if prior_deferred and flush_deferred:
+            content_parts.insert(0, prior_deferred)
+        elif prior_deferred:
+            self._deferred_content = prior_deferred + self._deferred_content
+
+        if self._deferred_content and flush_deferred:
+            content_parts.append(self._deferred_content)
             self._deferred_content = ""
 
         content_str = "".join(content_parts)
@@ -880,38 +952,6 @@ class ParserEngine(Parser):
                     function=DeltaFunctionCall(arguments=remaining),
                 )
             )
-
-    # ── Tool-call delta coalescing ──────────────────────────────────────
-
-    @staticmethod
-    def _coalesce_tool_call_deltas(
-        deltas: list[DeltaToolCall],
-    ) -> list[DeltaToolCall]:
-        """Merge entries that share the same index into one per index."""
-        merged: dict[int, DeltaToolCall] = {}
-        for tc in deltas:
-            existing = merged.get(tc.index)
-            if existing is None:
-                merged[tc.index] = tc
-                continue
-            if tc.id is not None and existing.id is None:
-                existing.id = tc.id
-            if tc.type is not None and existing.type is None:
-                existing.type = tc.type
-            if tc.function is not None:
-                if existing.function is None:
-                    existing.function = tc.function
-                else:
-                    if tc.function.name is not None and existing.function.name is None:
-                        existing.function.name = tc.function.name
-                    if tc.function.arguments is not None:
-                        if existing.function.arguments is None:
-                            existing.function.arguments = tc.function.arguments
-                        else:
-                            existing.function.arguments += tc.function.arguments
-        if len(merged) == len(deltas):
-            return deltas
-        return list(merged.values())
 
     # ── Arg conversion helpers ─────────────────────────────────────────
 

@@ -15,8 +15,9 @@ from __future__ import annotations
 
 import functools
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, NamedTuple
 
 from tests.parser.engine.replay_harness import (
     MockTokenizer,
@@ -28,6 +29,7 @@ from tests.parser.engine.replay_harness import (
 from vllm.entrypoints.openai.chat_completion.protocol import (
     ChatCompletionToolsParam,
 )
+from vllm.parser.engine.parser_engine_config import ParserState
 from vllm.parser.engine.registered_adapters import (
     Gemma4Parser,
     Glm47MoeParser,
@@ -55,6 +57,7 @@ class Scenario:
     content: str | None = None
     tool_calls: list[ToolCallSpec] | None = None
     after_tool_response: bool = False
+    false_positive_tag: bool = False
 
 
 # ── Scenarios ────────────────────────────────────────────────────────
@@ -150,6 +153,11 @@ SCENARIOS: list[Scenario] = [
         description="Empty tool block followed by content (edge case recovery)",
         content="Content after empty tools.",
         tool_calls=[],
+    ),
+    Scenario(
+        id="false-positive-tool-tag",
+        description="Tool start tag as literal text (never closed, recovery needed)",
+        false_positive_tag=True,
     ),
 ]
 
@@ -273,6 +281,7 @@ def _validate_sample(sample: Sample, parser_cls: type, **kwargs) -> None:
         parser,
         sample.tokens,
         chunk_size=1,
+        finished_on_last=sample.requires_finish,
         tools=sample.tools,
         prompt_token_ids=sample.prompt_token_ids,
     )
@@ -299,6 +308,7 @@ def _make_sample(
     tools: list[dict] | None,
     chat_template_kwargs: dict | None = None,
     prompt_token_ids: list[int] | None = None,
+    requires_finish: bool = False,
 ) -> Sample:
     tokens = _tokenize(segments, vocab)
     return Sample(
@@ -313,7 +323,59 @@ def _make_sample(
         tools=_validate_tools(tools),
         chat_template_kwargs=chat_template_kwargs,
         prompt_token_ids=prompt_token_ids,
+        requires_finish=requires_finish,
     )
+
+
+@dataclass
+class FalsePositiveConfig:
+    vocab: dict[str, int]
+    parser_cls: type
+
+
+class ModelBuilder(NamedTuple):
+    build: Callable[..., Sample | None]
+    false_positive: FalsePositiveConfig | None
+
+
+def _build_false_positive_sample(
+    scenario: Scenario,
+    name: str,
+    config: FalsePositiveConfig,
+    validate: bool,
+) -> Sample:
+    bare_tok = MockTokenizer(vocab={}, tokens=[])
+    cfg = config.parser_cls(bare_tok, None).parser_engine_config
+    tool_start = cfg.terminals["TOOL_START"]
+    think_end = (
+        cfg.terminals.get("THINK_END")
+        if cfg.initial_state == ParserState.REASONING
+        else None
+    )
+    segments: list[tuple[str, bool]] = []
+    if think_end is not None:
+        segments.append((think_end, True))
+    segments.extend(
+        [
+            ("Here is how ", False),
+            (tool_start, True),
+            (" works in the parser.", False),
+        ]
+    )
+    sample = _make_sample(
+        sample_id=f"{name}-{scenario.id}",
+        description=scenario.description,
+        vocab=config.vocab,
+        segments=segments,
+        expected_reasoning="" if think_end is not None else None,
+        expected_content=f"Here is how {tool_start} works in the parser.",
+        expected_tool_calls=None,
+        tools=None,
+        requires_finish=True,
+    )
+    if validate:
+        _validate_sample(sample, config.parser_cls)
+    return sample
 
 
 # ── Qwen3 (XML tool format, starts in REASONING) ────────────────────
@@ -381,7 +443,7 @@ def _build_qwen3(
     parser_cls: type = Qwen3Parser,
     strip_trailing_ws: bool = False,
     validate: bool = True,
-) -> Sample:
+) -> Sample | None:
     expected_reasoning: str | None
     if scenario.reasoning is not None:
         r = scenario.reasoning
@@ -460,7 +522,7 @@ def _minimax_m2_segments(scenario: Scenario) -> list[tuple[str, bool]]:
     return segs
 
 
-def _build_minimax_m2(scenario: Scenario, validate: bool = True) -> Sample:
+def _build_minimax_m2(scenario: Scenario, validate: bool = True) -> Sample | None:
     expected_reasoning: str | None
     if scenario.reasoning is not None:
         expected_reasoning = scenario.reasoning.rstrip()
@@ -559,7 +621,7 @@ def _gemma4_segments(scenario: Scenario) -> list[tuple[str, bool]]:
     return segs
 
 
-def _build_gemma4(scenario: Scenario, validate: bool = True) -> Sample:
+def _build_gemma4(scenario: Scenario, validate: bool = True) -> Sample | None:
     prompt_token_ids = None
     if scenario.after_tool_response:
         prompt_token_ids = [_GEMMA4_VOCAB["<|tool_response>"]]
@@ -579,7 +641,7 @@ def _build_gemma4(scenario: Scenario, validate: bool = True) -> Sample:
     return sample
 
 
-def _build_nemotron_v3(scenario: Scenario, validate: bool = True) -> Sample:
+def _build_nemotron_v3(scenario: Scenario, validate: bool = True) -> Sample | None:
     return _build_qwen3(
         scenario,
         name="nemotron_v3",
@@ -628,7 +690,7 @@ def _seed_oss_segments(scenario: Scenario) -> list[tuple[str, bool]]:
     return segs
 
 
-def _build_seed_oss(scenario: Scenario, validate: bool = True) -> Sample:
+def _build_seed_oss(scenario: Scenario, validate: bool = True) -> Sample | None:
     sample = _make_sample(
         sample_id=f"seed_oss-{scenario.id}",
         description=scenario.description,
@@ -702,7 +764,7 @@ def _glm47_moe_segments(scenario: Scenario) -> list[tuple[str, bool]]:
     return segs
 
 
-def _build_glm47_moe(scenario: Scenario, validate: bool = True) -> Sample:
+def _build_glm47_moe(scenario: Scenario, validate: bool = True) -> Sample | None:
     sample = _make_sample(
         sample_id=f"glm47_moe-{scenario.id}",
         description=scenario.description,
@@ -768,7 +830,7 @@ def _build_kimi_k2(
     scenario: Scenario,
     validate: bool = True,
     thinking: bool = True,
-) -> Sample:
+) -> Sample | None:
     expected_reasoning = (
         scenario.reasoning.rstrip()
         if (thinking and scenario.reasoning is not None)
@@ -810,33 +872,91 @@ _KIMI_K2_SCENARIOS = [
 
 # ── Registry and public API ──────────────────────────────────────────
 
-_BUILDERS: dict[str, Any] = {
-    "qwen3": _build_qwen3,
-    "gemma4": _build_gemma4,
-    "minimax_m2": _build_minimax_m2,
-    "nemotron_v3": _build_nemotron_v3,
-    "seed_oss": _build_seed_oss,
-    "glm47_moe": _build_glm47_moe,
-    "kimi_k2": _build_kimi_k2,
+_BUILDERS: dict[str, ModelBuilder] = {
+    "qwen3": ModelBuilder(
+        build=_build_qwen3,
+        false_positive=FalsePositiveConfig(
+            vocab=_QWEN3_VOCAB,
+            parser_cls=Qwen3Parser,
+        ),
+    ),
+    "gemma4": ModelBuilder(
+        build=_build_gemma4,
+        false_positive=FalsePositiveConfig(
+            vocab=_GEMMA4_VOCAB,
+            parser_cls=Gemma4Parser,
+        ),
+    ),
+    "minimax_m2": ModelBuilder(
+        build=_build_minimax_m2,
+        false_positive=FalsePositiveConfig(
+            vocab=_MINIMAX_M2_VOCAB,
+            parser_cls=MinimaxM2Parser,
+        ),
+    ),
+    "nemotron_v3": ModelBuilder(
+        build=_build_nemotron_v3,
+        false_positive=FalsePositiveConfig(
+            vocab=_QWEN3_VOCAB,
+            parser_cls=NemotronV3Parser,
+        ),
+    ),
+    "seed_oss": ModelBuilder(
+        build=_build_seed_oss,
+        false_positive=FalsePositiveConfig(
+            vocab=_SEED_OSS_VOCAB,
+            parser_cls=SeedOssParser,
+        ),
+    ),
+    "glm47_moe": ModelBuilder(
+        build=_build_glm47_moe,
+        false_positive=None,
+    ),
+    "kimi_k2": ModelBuilder(
+        build=_build_kimi_k2,
+        false_positive=None,
+    ),
 }
+
+
+def _dispatch_scenario(
+    model: str,
+    entry: ModelBuilder,
+    scenario: Scenario,
+    validate: bool = True,
+) -> Sample | None:
+    if scenario.false_positive_tag:
+        if entry.false_positive is None:
+            return None
+        return _build_false_positive_sample(
+            scenario,
+            model,
+            entry.false_positive,
+            validate,
+        )
+    return entry.build(scenario)
 
 
 @functools.cache
 def build_samples(model: str) -> tuple[Sample, ...]:
     """Build all scenario samples for a model, self-validated."""
-    builder = _BUILDERS[model]
+    entry = _BUILDERS[model]
     scenarios = _KIMI_K2_SCENARIOS if model == "kimi_k2" else SCENARIOS
-    return tuple(builder(s) for s in scenarios)
+    return tuple(
+        s
+        for s in (_dispatch_scenario(model, entry, sc) for sc in scenarios)
+        if s is not None
+    )
 
 
-def build_sample(model: str, scenario: Scenario) -> Sample:
+def build_sample(model: str, scenario: Scenario) -> Sample | None:
     """Build a single sample for one model + scenario."""
-    return _BUILDERS[model](scenario)
+    return _dispatch_scenario(model, _BUILDERS[model], scenario)
 
 
 def build_scaling_sample(
     model: str, token_count: int, validate: bool = False
-) -> Sample:
+) -> Sample | None:
     """Build a sample with approximately *token_count* tokens."""
     sentence = "The quick brown fox jumps over the lazy dog. "
     text = sentence * (token_count // 10 + 1)
@@ -846,4 +966,4 @@ def build_scaling_sample(
         reasoning=text,
         tool_calls=[_READ_TOOL],
     )
-    return _BUILDERS[model](scenario, validate=validate)
+    return _BUILDERS[model].build(scenario, validate=validate)

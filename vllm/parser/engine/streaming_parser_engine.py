@@ -187,6 +187,7 @@ class StreamingParserEngine:
         self._scanner.reset()
         self._lexer.reset()
         self._reset_args_state()
+        self._recovery_buffer: list[str] = []
 
     def feed(
         self,
@@ -257,6 +258,15 @@ class StreamingParserEngine:
             ParserState.TOOL_NAME,
             ParserState.TOOL_BETWEEN,
         ):
+            if self._recovery_buffer:
+                events.append(
+                    SemanticEvent(
+                        EventType.TEXT_CHUNK,
+                        value="".join(self._recovery_buffer),
+                        tool_index=-1,
+                    )
+                )
+            self._recovery_buffer.clear()
             if self.tool_index >= 0:
                 events.append(
                     SemanticEvent(
@@ -352,9 +362,14 @@ class StreamingParserEngine:
                     tool_index=self.tool_index,
                 )
             ]
+        if self.state == ParserState.TOOL_PREAMBLE:
+            self._recovery_buffer.append(text)
+            return []
         content_type = self.config.content_events.get(self.state)
         if content_type is not None:
             return [SemanticEvent(content_type, value=text, tool_index=self.tool_index)]
+        if self.state in self._TOOL_STATES:
+            self._recovery_buffer.append(text)
         return []
 
     def _on_content(self, text: str) -> list[SemanticEvent]:
@@ -368,6 +383,7 @@ class StreamingParserEngine:
         value: str,
     ) -> list[SemanticEvent]:
         events: list[SemanticEvent] = []
+        prev_state = self.state
 
         if (
             self.state == ParserState.TOOL_ARGS
@@ -401,6 +417,14 @@ class StreamingParserEngine:
             self._args_in_string = False
             self._args_escape_next = False
             self._args_safe_end = 0
+
+        if self.state in self._TOOL_STATES:
+            if prev_state not in self._TOOL_STATES:
+                self._recovery_buffer = [value]
+            else:
+                self._recovery_buffer.clear()
+        elif prev_state in self._TOOL_STATES:
+            self._recovery_buffer.clear()
 
         return events
 

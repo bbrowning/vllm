@@ -108,7 +108,19 @@ _ENGINE_PARSERS: dict[str, type[ParserEngine]] = {
 
 HOLDBACK_CONFIGS = [6, 12, 24]
 
-_REPLAY_SAMPLES = [(p.parser_cls, s, p.terminals) for p in _PARSERS for s in p.samples]
+_REPLAY_SAMPLES = [
+    (p.parser_cls, s, p.terminals)
+    for p in _PARSERS
+    for s in p.samples
+    if not s.requires_finish
+]
+
+_FALSE_POSITIVE_SAMPLES = [
+    (p.parser_cls, s, p.terminals, p.tool_start)
+    for p in _PARSERS
+    for s in p.samples
+    if s.requires_finish
+]
 
 
 @pytest.mark.parametrize("holdback", HOLDBACK_CONFIGS, ids=lambda h: f"holdback{h}")
@@ -526,6 +538,8 @@ class TestDropTokenReplay:
     @pytest.mark.parametrize("chunk_size", [1, 3, None])
     def test_drop_tokens_removed_from_output(self, parser_info, chunk_size):
         for sample in parser_info.samples:
+            if sample.requires_finish:
+                continue
             injected = _inject_drop_tokens(sample)
             tokenizer = make_mock_tokenizer(injected)
             parser = parser_info.parser_cls(
@@ -560,6 +574,8 @@ class TestDropTokenNonStreaming:
     )
     def test_drop_tokens_removed_from_output(self, parser_info):
         for sample in parser_info.samples:
+            if sample.requires_finish:
+                continue
             injected = _inject_drop_tokens(sample)
             tokenizer = make_mock_tokenizer(injected)
             parser = parser_info.parser_cls(
@@ -592,4 +608,56 @@ class TestAdapterReferences:
         )
         assert parser_cls.tool_parser_cls is not None, (
             f"{parser_name}: tool_parser_cls is None"
+        )
+
+
+class TestBuilderRegistry:
+    """Every _BUILDERS entry must be a ModelBuilder, not a bare callable."""
+
+    def test_all_entries_are_model_builders(self):
+        from tests.parser.engine.trace_builder import ModelBuilder
+
+        for name, entry in _BUILDERS.items():
+            assert isinstance(entry, ModelBuilder), (
+                f"Builder {name!r} is not a ModelBuilder. "
+                f"Wrap it with ModelBuilder(build=..., false_positive=...) "
+                f"or ModelBuilder(build=..., false_positive=None) to opt out."
+            )
+
+
+@pytest.mark.parametrize(
+    "chunk_size", [1, 2, 3, 5, 10, None], ids=lambda c: f"chunk{c}"
+)
+@pytest.mark.parametrize(
+    "parser_cls,sample,terminals,tool_start",
+    _FALSE_POSITIVE_SAMPLES,
+    ids=lambda v: v.id if hasattr(v, "id") else "",
+)
+class TestFalsePositiveRecovery:
+    """Replay false-positive tool tag samples with finish() across models.
+
+    When a tool start terminal appears as literal content text and is
+    never closed, the parser enters TOOL_PREAMBLE and buffers content.
+    On finish(), the recovery buffer is emitted as content including
+    the tag itself.
+    """
+
+    def test_replay(self, parser_cls, sample, terminals, tool_start, chunk_size):
+        tokenizer = make_mock_tokenizer(sample)
+        parser = parser_cls(tokenizer, sample.tools)
+        deltas = replay_streaming(
+            parser,
+            sample.tokens,
+            chunk_size=chunk_size,
+            finished_on_last=True,
+            prompt_token_ids=sample.prompt_token_ids,
+        )
+        output = collect_output(deltas)
+
+        assert_parse_output(output, sample)
+        filtered_terminals = [t for t in terminals if t != tool_start]
+        assert_no_terminal_leakage(
+            output,
+            filtered_terminals,
+            context=f"chunk_size={chunk_size}",
         )
