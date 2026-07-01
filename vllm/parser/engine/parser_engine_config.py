@@ -95,6 +95,14 @@ class ParserEngineConfig:
     # Reject tool calls whose names are absent from the request tools.
     validate_tool_names: bool = False
 
+    def __post_init__(self):
+        if ParserState.TOOL_PREAMBLE in self.content_events:
+            raise ValueError(
+                "TOOL_PREAMBLE cannot appear in content_events; "
+                "preamble text is always buffered for false-positive "
+                "recovery and the mapping would be silently ignored."
+            )
+
     @cached_property
     def terminal_defs(self):
         from vllm.parser.engine.incremental_lexer import terminals_from_literals

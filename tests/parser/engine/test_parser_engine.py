@@ -1908,18 +1908,6 @@ def _qwen3_like_preamble_config() -> ParserEngineConfig:
     )
 
 
-def _qwen3_preamble_in_content_config() -> ParserEngineConfig:
-    """Variant that (incorrectly) maps TOOL_PREAMBLE in content_events."""
-    base = _qwen3_like_preamble_config()
-    return replace(
-        base,
-        content_events={
-            **base.content_events,
-            ParserState.TOOL_PREAMBLE: EventType.TEXT_CHUNK,
-        },
-    )
-
-
 def _collect_deltas(engine, chunks, mock_request):
     deltas = []
     for chunk in chunks:
@@ -1967,38 +1955,14 @@ class TestUnclosedToolTagRecovery:
         assert before_idx < after_idx
         assert tool_calls is None
 
-    def test_preamble_in_content_events_still_recovers_streaming(self, mock_request):
-        """Recovery must work even if TOOL_PREAMBLE is mapped in
-        content_events — the engine must buffer regardless."""
-        engine = _make_engine(_qwen3_preamble_in_content_config())
-        deltas = _collect_deltas(
-            engine, ["Here is how ", "<tool_call>", " works."], mock_request
-        )
-
-        full_content = "".join(d.content for d in deltas if d.content is not None)
-        assert "Here is how " in full_content
-        assert "<tool_call>" in full_content
-        assert " works." in full_content
-
-        assert full_content.index("<tool_call>") < full_content.index(" works.")
-
-        all_tool_calls = [tc for d in deltas if d.tool_calls for tc in d.tool_calls]
-        assert len(all_tool_calls) == 0
-
-    def test_preamble_in_content_events_parse_order(self, mock_request):
-        """Non-streaming parse() must preserve content order even when
-        TOOL_PREAMBLE is in content_events."""
-        engine = _make_engine(_qwen3_preamble_in_content_config())
-        text = "Before <tool_call> After"
-
-        _, content, tool_calls = engine.parse(text, mock_request)
-
-        assert content is not None
-        assert "Before " in content
-        assert "<tool_call>" in content
-        assert " After" in content
-        before_idx = content.index("Before ")
-        tag_idx = content.index("<tool_call>")
-        after_idx = content.index(" After")
-        assert before_idx < tag_idx < after_idx
-        assert tool_calls is None
+    def test_preamble_in_content_events_rejected(self):
+        """TOOL_PREAMBLE in content_events must be rejected at config time."""
+        base = _qwen3_like_preamble_config()
+        with pytest.raises(ValueError, match="TOOL_PREAMBLE"):
+            replace(
+                base,
+                content_events={
+                    **base.content_events,
+                    ParserState.TOOL_PREAMBLE: EventType.TEXT_CHUNK,
+                },
+            )
