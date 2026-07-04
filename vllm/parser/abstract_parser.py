@@ -843,19 +843,19 @@ class DelegatingParser(Parser):
                 state.reasoning_ended = True
                 reasoning_transitioned = True
                 current_token_ids = self.extract_content_ids(delta_token_ids)
+                flush_delta = (
+                    reasoning_parser.finish_streaming()  # type: ignore[union-attr, attr-defined]
+                    if reasoning_parser is not None
+                    and reasoning_parser.engine_based_streaming
+                    else None
+                )
+                current_text = (
+                    (delta_message.content if delta_message else None) or ""
+                ) + ((flush_delta.content if flush_delta else None) or "")
                 if self._engine_based:
-                    flush_delta = reasoning_parser.finish_streaming()  # type: ignore[union-attr, attr-defined]
-                    current_text = (
-                        (delta_message.content if delta_message else None) or ""
-                    ) + ((flush_delta.content if flush_delta else None) or "")
                     if delta_message and self._tool_parser is not None:
                         delta_message.content = None
                 else:
-                    current_text = (
-                        delta_message.content
-                        if delta_message and delta_message.content
-                        else ""
-                    )
                     delta_text = current_text
 
         # Tool call extraction
