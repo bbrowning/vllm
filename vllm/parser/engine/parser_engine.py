@@ -842,8 +842,7 @@ class ParserEngine(Parser):
                 # Name not yet known — try to extract from accumulated args
                 name = self._try_extract_name(idx)
                 self._emit_name_delta(idx, deltas, name)
-        elif event.value:
-            # Name already sent — emit arg delta
+        if slot.name_sent and event.value:
             arg_delta = self._compute_arg_delta(idx, event.value)
             if arg_delta:
                 deltas.append(

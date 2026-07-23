@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 
 import regex as re
 
-from vllm.entrypoints.openai.engine.protocol import DeltaFunctionCall, DeltaToolCall
+from vllm.entrypoints.openai.engine.protocol import DeltaToolCall
 from vllm.parser.engine.events import EventType
 from vllm.parser.engine.parser_engine import ParserEngine
 from vllm.parser.engine.parser_engine_config import (
@@ -213,25 +213,6 @@ class KimiK2Parser(ParserEngine):
                 self._tool_slots[idx].id = tool_id or ""
                 self._tool_slots[idx].name = tool_name
         super()._handle_tool_end(event, deltas)
-
-    def _handle_arg_chunk(self, event, deltas) -> None:
-        idx = event.tool_index
-        name_sent_before = (
-            0 <= idx < len(self._tool_slots) and self._tool_slots[idx].name_sent
-        )
-        super()._handle_arg_chunk(event, deltas)
-        if (
-            event.value
-            and not name_sent_before
-            and 0 <= idx < len(self._tool_slots)
-            and self._tool_slots[idx].name_sent
-        ):
-            deltas.append(
-                DeltaToolCall(
-                    index=idx,
-                    function=DeltaFunctionCall(arguments=event.value),
-                )
-            )
 
     def _extract_args_json(self, raw_args: str, func_name: str) -> str:
         return raw_args.strip() or "{}"

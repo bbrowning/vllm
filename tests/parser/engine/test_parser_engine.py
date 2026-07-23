@@ -393,6 +393,86 @@ class TestCoalesceToolCallDeltas:
         assert result[0].function.arguments == '{"a":1}'
 
 
+# ── TestArgDeltaOnNameTransition ─────────────────────────────────────
+
+
+class TestArgDeltaOnNameTransition:
+    """Arg delta must not be dropped when name emission happens in the
+    same _events_to_delta call as the first ARG_VALUE_CHUNK."""
+
+    def test_arg_delta_emitted_when_name_sent_same_batch(self):
+        """TOOL_NAME + ARG_VALUE_CHUNK in one batch: both name and args
+        must appear in the coalesced delta (no converter)."""
+        engine = _make_engine(_hermes_config())
+        engine._events_to_delta(
+            [SemanticEvent(EventType.TOOL_CALL_START, tool_index=0)]
+        )
+        delta = engine._events_to_delta(
+            [
+                SemanticEvent(EventType.TOOL_NAME, "get_weather", tool_index=0),
+                SemanticEvent(
+                    EventType.ARG_VALUE_CHUNK,
+                    '{"city": "NYC"}',
+                    tool_index=0,
+                ),
+                SemanticEvent(EventType.TOOL_CALL_END, tool_index=0),
+            ]
+        )
+        assert delta is not None
+        assert len(delta.tool_calls) == 1
+        tc = delta.tool_calls[0]
+        assert tc.function.name == "get_weather"
+        assert tc.function.arguments == '{"city": "NYC"}'
+
+    def test_arg_delta_emitted_across_separate_batches(self):
+        """TOOL_NAME and ARG_VALUE_CHUNK in separate calls — the
+        already-working path must remain correct."""
+        engine = _make_engine(_hermes_config())
+        engine._events_to_delta(
+            [SemanticEvent(EventType.TOOL_CALL_START, tool_index=0)]
+        )
+        engine._events_to_delta(
+            [SemanticEvent(EventType.TOOL_NAME, "get_weather", tool_index=0)]
+        )
+        delta = engine._events_to_delta(
+            [
+                SemanticEvent(
+                    EventType.ARG_VALUE_CHUNK,
+                    '{"city": "NYC"}',
+                    tool_index=0,
+                ),
+            ]
+        )
+        assert delta is not None
+        assert len(delta.tool_calls) == 1
+        assert delta.tool_calls[0].function.arguments == '{"city": "NYC"}'
+
+    def test_arg_delta_with_converter_on_name_transition(self):
+        """Same-batch name + arg with a converter: the converted arg
+        delta must still appear alongside the name."""
+        engine = _make_engine(_converter_config())
+        engine._events_to_delta(
+            [SemanticEvent(EventType.TOOL_CALL_START, tool_index=0)]
+        )
+        delta = engine._events_to_delta(
+            [
+                SemanticEvent(EventType.TOOL_NAME, "f", tool_index=0),
+                SemanticEvent(
+                    EventType.ARG_VALUE_CHUNK,
+                    "city=NYC",
+                    tool_index=0,
+                ),
+                SemanticEvent(EventType.TOOL_CALL_END, tool_index=0),
+            ]
+        )
+        assert delta is not None
+        assert len(delta.tool_calls) == 1
+        tc = delta.tool_calls[0]
+        assert tc.function.name == "f"
+        assert tc.function.arguments is not None
+        assert "NYC" in tc.function.arguments
+
+
 # ── TestContentWhitespaceHandling ────────────────────────────────────
 
 
