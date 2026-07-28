@@ -6,10 +6,11 @@ from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from concurrent.futures import Executor, ThreadPoolExecutor
 from functools import cached_property
-from typing import TYPE_CHECKING, Any, Generic, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Generic, overload
 
 from typing_extensions import TypeVar
 
+from vllm import envs
 from vllm.inputs import (
     EmbedsInput,
     EmbedsPrompt,
@@ -68,10 +69,27 @@ logger = init_logger(__name__)
 
 _T = TypeVar("_T", bound=TokenizerLike, default=TokenizerLike)
 
+_CONTENT_PROTECTION_UNSUPPORTED_RENDERER_ERROR: Final[str] = (
+    "VLLM_CHAT_CONTENT_PROTECTION is not supported for the {renderer} renderer; "
+    "only the HF renderer implements it. Refusing to start (fail closed)."
+)
+
 
 class BaseRenderer(ABC, Generic[_T]):
+    # Overridden to True only by renderers that actually neutralize untrusted
+    # content. Every other renderer fails closed when content protection is
+    # opted in, so enabling it can never silently no-op.
+    _SUPPORTS_CONTENT_PROTECTION: ClassVar[bool] = False
+
     def __init__(self, config: "VllmConfig", tokenizer: _T | None) -> None:
         super().__init__()
+
+        if envs.VLLM_CHAT_CONTENT_PROTECTION and not self._SUPPORTS_CONTENT_PROTECTION:
+            raise ValueError(
+                _CONTENT_PROTECTION_UNSUPPORTED_RENDERER_ERROR.format(
+                    renderer=type(self).__name__
+                )
+            )
 
         self.config = config
         self.model_config = config.model_config
