@@ -148,6 +148,10 @@ class ParserEngine(Parser):
         if end_text:
             self._reasoning_end_token_id = vocab.get(end_text)
 
+        self._reasoning_end_trigger_ids: set[int] = set()
+        if self._reasoning_end_token_id is not None:
+            self._reasoning_end_trigger_ids.add(self._reasoning_end_token_id)
+
     @property
     def reasoning_start_str(self) -> str | None:
         return self.parser_engine_config.terminals.get("THINK_START")
@@ -604,6 +608,16 @@ class ParserEngine(Parser):
                 if start_id is not None and input_ids[i] == start_id:
                     return False
             return False
+        return self._reasoning_ended
+
+    def is_reasoning_end_streaming(
+        self, input_ids: Sequence[int], delta_ids: Sequence[int]
+    ) -> bool:
+        triggers = self._reasoning_end_trigger_ids
+        if triggers:
+            if not any(d in triggers for d in delta_ids):
+                return False
+            return self.is_reasoning_end(list(input_ids))
         return self._reasoning_ended
 
     def extract_content_ids(self, input_ids: list[int]) -> list[int]:

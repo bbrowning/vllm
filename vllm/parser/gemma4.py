@@ -411,6 +411,12 @@ class Gemma4Parser(ParserEngine):
         self._tool_call_token_id: int | None = vocab.get("<|tool_call>")
         self._new_turn_token_id: int | None = vocab.get("<|turn>")
         self._tool_response_token_id: int | None = vocab.get("<|tool_response>")
+        if self._tool_call_token_id is not None:
+            self._reasoning_end_trigger_ids.add(self._tool_call_token_id)
+        if not self._thinking_enabled:
+            for tid in (self._new_turn_token_id, self._tool_response_token_id):
+                if tid is not None:
+                    self._reasoning_end_trigger_ids.add(tid)
         self._reasoning_text: str = ""
         self._prefix_stripped: bool = False
         self._is_first_feed: bool = True

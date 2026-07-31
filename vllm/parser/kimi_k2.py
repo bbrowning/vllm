@@ -174,6 +174,8 @@ class KimiK2Parser(ParserEngine):
         self._start_token_id = vocab.get(THINK_START)
         self._end_token_id = vocab.get(THINK_END)
         self._tool_section_start_token_id = vocab.get(TOOL_SECTION_START)
+        if self.thinking_enabled and self._tool_section_start_token_id is not None:
+            self._reasoning_end_trigger_ids.add(self._tool_section_start_token_id)
 
     @staticmethod
     def _extract_tool_id_and_name(header: str | None) -> tuple[str | None, str | None]:

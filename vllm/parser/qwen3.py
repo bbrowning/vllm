@@ -243,6 +243,8 @@ class Qwen3Parser(ParserEngine):
         vocab = self.vocab
         self._tool_call_token_id: int | None = vocab.get(self.TOOL_START)
         self._tool_call_end_token_id: int | None = vocab.get(self.TOOL_END)
+        if self._tool_call_token_id is not None:
+            self._reasoning_end_trigger_ids.add(self._tool_call_token_id)
 
     def extract_reasoning(
         self,

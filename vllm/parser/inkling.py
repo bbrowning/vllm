@@ -306,6 +306,14 @@ class InklingParser(ParserEngine):
     ) -> None:
         kwargs.setdefault("parser_engine_config", inkling_config())
         super().__init__(tokenizer, tools, **kwargs)
+        # Inkling keys reasoning end on the current block marker rather than a
+        # THINK_END token (see is_reasoning_end), so seed the O(1) streaming
+        # triggers with the markers that flip it to True.
+        vocab = self.vocab
+        for text in (CONTENT_TEXT, CONTENT_MODEL_END_SAMPLING):
+            token_id = vocab.get(text)
+            if token_id is not None:
+                self._reasoning_end_trigger_ids.add(token_id)
 
     def adjust_initial_state_from_prompt(self, prompt_token_ids: Sequence[int]) -> None:
         """Seed the initial parsing state from the prompt tail.
