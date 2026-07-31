@@ -713,10 +713,10 @@ environment_variables: dict[str, Callable[[], Any]] = {
     # Python package must be installed.
     "VLLM_USE_FASTOKENS": lambda: bool(int(os.getenv("VLLM_USE_FASTOKENS", "0"))),
     # Opt-in token-space defense against chat-template control-token injection.
-    # When enabled, untrusted (user/tool) message content is tokenized in
-    # isolation with special-token matching disabled and spliced into the
-    # rendered token skeleton, so literal control-token strings can never
-    # become real special-token IDs. See vllm/renderers/hf.py.
+    # When enabled, message content (any role) is tokenized in isolation with
+    # special-token matching disabled and spliced into the rendered token
+    # skeleton, so literal control-token strings can never become real
+    # special-token IDs. See vllm/renderers/hf.py.
     "VLLM_CHAT_CONTENT_PROTECTION": lambda: bool(
         int(os.getenv("VLLM_CHAT_CONTENT_PROTECTION", "0"))
     ),

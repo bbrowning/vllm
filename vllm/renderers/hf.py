@@ -238,15 +238,25 @@ def _build_mixed_prompt_embeds(
 # place untouched, so the template renders them normally -- benign requests are a
 # no-op and per-content transforms (`| trim`, `| tojson`, ...) apply correctly.
 #
-# Protected untrusted strings are: user/tool message content (str or each openai
-# text / tool_reference part) and message `name`, plus assistant `tool_calls`
-# `function.name` and the string leaves and keys of `function.arguments` (a dict,
-# list, or a raw JSON string -- all of which render raw/adjacent to control
-# tokens and are frequently attacker-influenced in agentic loops). Assistant
-# `tool_calls` `id` and tool-message `tool_call_id` are validated and rejected
-# rather than spliced (see `_validate_tool_call_ids`). Media parts and non-string
-# scalars pass through. Assistant message *content* is model-generated and left
-# untouched.
+# Protected strings are every message's content (str, or each openai text /
+# tool_reference part) and `name`, plus assistant `tool_calls` `function.name`
+# and the string leaves and keys of `function.arguments` (a dict, list, or a raw
+# JSON string -- all of which render raw/adjacent to control tokens). Coverage
+# is role-agnostic: a stateless chat request lets a caller put anything under
+# any role, so restricting protection to "untrusted" roles would not stop a
+# client from forging turns anyway (they could just send role="system"
+# directly) -- the point is that literal text never silently turns into a real
+# special-token ID, no matter which role carries it. This includes assistant
+# content: a model emitting a structural marker like `<think>`/`</think>` as
+# plain decoded text (e.g. no reasoning parser configured) and having it
+# resubmitted is the same shape of problem as a client typing it directly, so
+# it is neutralized the same way -- callers that want faithful reasoning
+# round-tripping should resubmit reasoning via the `reasoning`/
+# `reasoning_content` message field with a reasoning parser configured, not
+# rely on think-tokens surviving in plain `content`. Assistant `tool_calls`
+# `id` and tool-message `tool_call_id` are validated and rejected rather than
+# spliced (see `_validate_tool_call_ids`). Media parts and non-string scalars
+# pass through.
 #
 # A neutralized string never passes through the Jinja template, so per-content
 # transforms are not reproduced for it: it is spliced verbatim as isolated
@@ -281,8 +291,6 @@ UNTRUSTED_CONTENT_PLACEHOLDER_PREFIX: Final[str] = "<|vllm_untrusted_content"
 # creates a slot per string value and key, so keep this comfortably above
 # realistic agentic requests; oversized requests fail closed.
 _UNTRUSTED_PLACEHOLDER_POOL_CAP: Final[int] = 512
-
-_UNTRUSTED_ROLES: Final[frozenset[str]] = frozenset({"user", "tool"})
 
 # Keyed by tokenizer identity: these caches use the default object hash/eq
 # (identity). Neither the tokenizer class nor the `TokenizerPool` subclass that
@@ -685,9 +693,9 @@ def _transform_tool_call(tool_call: Any, fn: _SlotFn) -> Any:
 
 
 def _transform_message(msg: ConversationMessage, fn: _SlotFn) -> ConversationMessage:
-    """Walk a message's untrusted strings in a deterministic order, calling `fn`
+    """Walk a message's protected strings in a deterministic order, calling `fn`
     on each and returning a new message with the replacements. Copy-on-write:
-    `fn` is always called for every untrusted string, but the message is copied
+    `fn` is always called for every protected string, but the message is copied
     only when `fn` actually changes one, so the read-only reject pass and
     unchanged slots allocate nothing.
 
@@ -695,48 +703,42 @@ def _transform_message(msg: ConversationMessage, fn: _SlotFn) -> ConversationMes
     placeholder in a predictable position, but it is not a correctness contract:
     splicing matches placeholders by token identity (see
     `_splice_untrusted_content`), so re-ordering the walk would still splice
-    correctly. Order: `user`/`tool` content (str, or each
-    `{"type":"text"}`/`{"type":"tool_reference"}` part), then the message `name`;
-    for `assistant`, each `tool_calls` entry's `function.name` then its
-    `arguments`. Assistant *content* is model-generated and left untouched.
+    correctly. Order: content (str, or each
+    `{"type":"text"}`/`{"type":"tool_reference"}` part), then the message
+    `name`; for `assistant`, each `tool_calls` entry's `function.name` then its
+    `arguments`. Coverage is role-agnostic -- see the module banner above.
     """
-    role = msg.get("role")
-    has_tool_calls = role == "assistant" and bool(msg.get("tool_calls"))
-    if role not in _UNTRUSTED_ROLES and not has_tool_calls:
-        return msg
-
     updates: dict[str, Any] = {}
 
-    if role in _UNTRUSTED_ROLES:
-        content = msg.get("content")
-        if isinstance(content, str):
-            new_content = fn(content)
-            if new_content is not content:
-                updates["content"] = new_content
-        elif isinstance(content, list):
-            new_parts: list[Any] | None = None
-            for j, part in enumerate(content):
-                field = _untrusted_text_part_field(part)
-                if field is None:
-                    continue
-                old_text = part[field]
-                new_text = fn(old_text)
-                if new_text is not old_text:
-                    if new_parts is None:
-                        new_parts = list(content)
-                    new_part = copy.copy(part)
-                    new_part[field] = new_text
-                    new_parts[j] = new_part
-            if new_parts is not None:
-                updates["content"] = new_parts
-        name = msg.get("name")
-        if isinstance(name, str):
-            new_name = fn(name)
-            if new_name is not name:
-                updates["name"] = new_name
+    content = msg.get("content")
+    if isinstance(content, str):
+        new_content = fn(content)
+        if new_content is not content:
+            updates["content"] = new_content
+    elif isinstance(content, list):
+        new_parts: list[Any] | None = None
+        for j, part in enumerate(content):
+            field = _untrusted_text_part_field(part)
+            if field is None:
+                continue
+            old_text = part[field]
+            new_text = fn(old_text)
+            if new_text is not old_text:
+                if new_parts is None:
+                    new_parts = list(content)
+                new_part = copy.copy(part)
+                new_part[field] = new_text
+                new_parts[j] = new_part
+        if new_parts is not None:
+            updates["content"] = new_parts
+    name = msg.get("name")
+    if isinstance(name, str):
+        new_name = fn(name)
+        if new_name is not name:
+            updates["name"] = new_name
 
-    if has_tool_calls:
-        tool_calls = msg["tool_calls"] or []
+    if msg.get("role") == "assistant":
+        tool_calls = msg.get("tool_calls") or []
         new_tool_calls = [_transform_tool_call(tc, fn) for tc in tool_calls]
         if any(new is not old for new, old in zip(new_tool_calls, tool_calls)):
             updates["tool_calls"] = new_tool_calls
