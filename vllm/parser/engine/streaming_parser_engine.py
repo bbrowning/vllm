@@ -151,10 +151,23 @@ class StreamingParserEngine:
 
         self._lexer = IncrementalLexer(lexer_shape, content_terminal=CONTENT_TERMINAL)
 
+        # Terminals whose transitions touch a tool state. In the reasoning
+        # (skip_tool_parsing) pass these are forwarded verbatim so the tool pass
+        # can re-lex complete tool syntax instead of parsing it here.
         self._tool_terminals: frozenset[str] = frozenset(
             terminal
             for (state, terminal), tr in config.transitions.items()
             if tr.next_state in self._TOOL_STATES or state in self._TOOL_STATES
+        )
+        # Terminals that leave the tool region (a tool state -> non-tool state).
+        # These close a tool span. Defined structurally, not via TOOL_CALL_END:
+        # in multi-terminal grammars the wrapper closer (e.g. minimax's
+        # ``</minimax:tool_call>``) differs from the call-end event terminal
+        # (``</invoke>``), and only the former returns to normal content.
+        self._tool_exit_terminals: frozenset[str] = frozenset(
+            terminal
+            for (state, terminal), tr in config.transitions.items()
+            if state in self._TOOL_STATES and tr.next_state not in self._TOOL_STATES
         )
 
         self.skip_tool_parsing = False
@@ -186,6 +199,9 @@ class StreamingParserEngine:
         self._scanner.reset()
         self._lexer.reset()
         self._message_header_buffer = ""
+        # Lexical passthrough mode: set once the reasoning pass forwards a tool
+        # opener, cleared by the matching tool-call closer. See ``_on_terminal``.
+        self._in_skipped_tool_span = False
         self._reset_args_state()
 
     def feed(
@@ -316,39 +332,63 @@ class StreamingParserEngine:
         if transition is None:
             if self._has_drops and terminal == DROP_TERMINAL:
                 return []
+            # A tool-region exit is still forwarded verbatim here, but it also
+            # ends the lexical passthrough span. Clear the flag so it never goes
+            # stale for grammars whose wrapper closer has no transition from the
+            # projected CONTENT state (e.g. qwen3/deepseek ``</tool_call>``),
+            # which would otherwise skip the span-clearing in the block below.
+            if self.skip_tool_parsing and terminal in self._tool_exit_terminals:
+                self._in_skipped_tool_span = False
             return self._emit_for_state(value)
 
         if self.skip_tool_parsing and terminal in self._tool_terminals:
-            if self.state == ParserState.MESSAGE_HEADER:
-                self.state = ParserState.CONTENT
-                self._message_header_buffer = ""
-                return [
-                    SemanticEvent(
-                        EventType.TEXT_CHUNK,
-                        value=value,
-                        tool_index=self.tool_index,
-                    )
-                ]
-            if EventType.REASONING_END in transition.events:
-                self.state = ParserState.CONTENT
-                return [
-                    SemanticEvent(
-                        EventType.REASONING_END,
-                        value=value,
-                        tool_index=self.tool_index,
-                    ),
-                    SemanticEvent(
-                        EventType.TEXT_CHUNK,
-                        value=value,
-                        tool_index=self.tool_index,
-                    ),
-                ]
-            content_type = self.config.content_events.get(self.state)
-            if content_type is not None:
-                return [
-                    SemanticEvent(content_type, value=value, tool_index=self.tool_index)
-                ]
-            return []
+            # Reasoning pass: forward tool syntax verbatim for the tool pass,
+            # but a tool-region exit can double as a plain text/reasoning block
+            # closer (inkling reuses ``<|end_message|>``). Outside an open span
+            # it is not tool syntax, so let it fall through to its normal
+            # consuming transition instead of leaking it into content.
+            is_opener = transition.next_state in self._TOOL_STATES
+            is_exit = terminal in self._tool_exit_terminals
+            used_as_plain_closer = (
+                is_exit and not is_opener and not self._in_skipped_tool_span
+            )
+            if not used_as_plain_closer:
+                if is_opener:
+                    self._in_skipped_tool_span = True
+                elif is_exit:
+                    self._in_skipped_tool_span = False
+                if self.state == ParserState.MESSAGE_HEADER:
+                    self.state = ParserState.CONTENT
+                    self._message_header_buffer = ""
+                    return [
+                        SemanticEvent(
+                            EventType.TEXT_CHUNK,
+                            value=value,
+                            tool_index=self.tool_index,
+                        )
+                    ]
+                if EventType.REASONING_END in transition.events:
+                    self.state = ParserState.CONTENT
+                    return [
+                        SemanticEvent(
+                            EventType.REASONING_END,
+                            value=value,
+                            tool_index=self.tool_index,
+                        ),
+                        SemanticEvent(
+                            EventType.TEXT_CHUNK,
+                            value=value,
+                            tool_index=self.tool_index,
+                        ),
+                    ]
+                content_type = self.config.content_events.get(self.state)
+                if content_type is not None:
+                    return [
+                        SemanticEvent(
+                            content_type, value=value, tool_index=self.tool_index
+                        )
+                    ]
+                return []
 
         if transition.skip_in_token_id_mode and self._ever_had_token_ids:
             return self._emit_for_state(value)
