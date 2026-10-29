@@ -94,6 +94,8 @@ class ToolCallSlot:
     def append_args(self, value: str) -> None:
         self._args_parts.append(value)
         self._args_joined = None
+        if self.arg_converter is not None:
+            self.arg_converter.feed(value)
 
     @property
     def streamed_json(self) -> str:
@@ -1040,8 +1042,6 @@ class ParserEngine(Parser):
         slot = self._tool_slots[idx]
         if event.value:
             slot.append_args(event.value)
-            if slot.arg_converter is not None:
-                slot.arg_converter.feed(event.value)
 
         if not slot.name_sent:
             if slot.name:

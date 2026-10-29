@@ -71,24 +71,21 @@ class Glm47ArgConverter:
     never rescanned, and the open trailing value can only start there.
     """
 
-    __slots__ = ("_params", "_pending_parts", "_pending")
+    __slots__ = ("_params", "_pending_parts")
 
     def __init__(self) -> None:
         self._params: dict[str, object] = {}
         self._pending_parts: list[str] = []
-        self._pending: str | None = ""
 
     def feed(self, delta: str) -> None:
         self._pending_parts.append(delta)
-        self._pending = None
 
     def _pending_text(self) -> str:
-        if self._pending is None:
-            self._pending = "".join(self._pending_parts)
-            self._pending_parts = [self._pending]
-        return self._pending
+        pending = "".join(self._pending_parts)
+        self._pending_parts = [pending]
+        return pending
 
-    def parse(self, partial: bool) -> tuple[dict[str, object], str | None]:
+    def _parse(self, partial: bool) -> tuple[dict[str, object], str | None]:
         """Return the arguments and the key of the open trailing value, if any."""
         params = self._params
         pending = self._pending_text()
@@ -98,7 +95,6 @@ class Glm47ArgConverter:
             pos = match.end()
         if pos:
             pending = pending[pos:]
-            self._pending = pending
             self._pending_parts = [pending]
 
         open_key = None
@@ -113,13 +109,13 @@ class Glm47ArgConverter:
         return params, open_key
 
     def convert(self, partial: bool) -> str:
-        return json.dumps(self.parse(partial)[0], ensure_ascii=False)
+        return json.dumps(self._parse(partial)[0], ensure_ascii=False)
 
     def extender(self) -> ArgValueExtender | None:
         # The open value runs to the end of the arguments and is the last
         # JSON value, so a delta appends its JSON-escaped text unless it
         # closes the value.
-        params, open_key = self.parse(partial=True)
+        params, open_key = self._parse(partial=True)
         if open_key is None or next(reversed(params)) != open_key:
             return None
 

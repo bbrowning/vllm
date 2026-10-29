@@ -1520,26 +1520,31 @@ def _collect_arg_deltas(deltas: list) -> str:
     return "".join(parts)
 
 
-def _run_streaming_tool(engine, name: str, chunks: list[str]) -> dict:
+def _run_streaming_tool(
+    engine, name: str, chunks: list[str], tool_index: int = 0
+) -> dict:
+    idx = tool_index
     deltas = []
     deltas.append(
         engine._events_to_delta(
-            [SemanticEvent(EventType.TOOL_CALL_START, tool_index=0)]
+            [SemanticEvent(EventType.TOOL_CALL_START, tool_index=idx)]
         )
     )
     deltas.append(
         engine._events_to_delta(
-            [SemanticEvent(EventType.TOOL_NAME, name, tool_index=0)]
+            [SemanticEvent(EventType.TOOL_NAME, name, tool_index=idx)]
         )
     )
     for chunk in chunks:
         deltas.append(
             engine._events_to_delta(
-                [SemanticEvent(EventType.ARG_VALUE_CHUNK, chunk, tool_index=0)]
+                [SemanticEvent(EventType.ARG_VALUE_CHUNK, chunk, tool_index=idx)]
             )
         )
     deltas.append(
-        engine._events_to_delta([SemanticEvent(EventType.TOOL_CALL_END, tool_index=0)])
+        engine._events_to_delta(
+            [SemanticEvent(EventType.TOOL_CALL_END, tool_index=idx)]
+        )
     )
     return json.loads(_collect_arg_deltas(deltas))
 
@@ -1706,25 +1711,24 @@ class TestArgDeltaWithConverter:
 # ── TestArgValueExtender ──────────────────────────────────────────
 
 
-def _extender_config(structural: frozenset[str] | None = None) -> ParserEngineConfig:
-    """``_kv_converter`` plus an extender for its trailing ``k=v`` record,
-    which is open until whitespace follows it; mirrors
-    ``Glm47ArgConverter.extender``."""
+def _kv_value_extender(raw_args: str):
+    """Extender for the trailing ``k=v`` record of ``_kv_converter``, which is
+    open until whitespace follows it; mirrors ``Glm47ArgConverter.extender``."""
+    if re.search(r"\w+=\S+$", raw_args) is None:
+        return None
 
-    def factory(raw_args: str):
-        if re.search(r"\w+=\S+$", raw_args) is None:
+    def extend(delta: str) -> str | None:
+        if re.search(r"\s", delta):
             return None
+        return json.dumps(delta, ensure_ascii=False)[1:-1]
 
-        def extend(delta: str) -> str | None:
-            if re.search(r"\s", delta):
-                return None
-            return json.dumps(delta, ensure_ascii=False)[1:-1]
+    return extend
 
-        return extend
 
+def _extender_config(structural: frozenset[str] | None = None) -> ParserEngineConfig:
     return dataclasses.replace(
         _converter_config(),
-        arg_value_extender=factory,
+        arg_value_extender=_kv_value_extender,
         arg_structural_chars=structural,
     )
 
@@ -1732,12 +1736,17 @@ def _extender_config(structural: frozenset[str] | None = None) -> ParserEngineCo
 class TestArgValueExtender:
     """Engine contract for ``ParserEngineConfig.arg_value_extender``."""
 
-    def test_live_extender_sees_deltas_without_structural_chars(self):
+    @pytest.mark.parametrize(
+        "make_config",
+        [_extender_config, lambda structural: _slot_converter_config(structural)],
+        ids=["arg_value_extender", "slot_arg_converter"],
+    )
+    def test_live_extender_sees_deltas_without_structural_chars(self, make_config):
         """A delta without structural chars must still reach the live
         extender: gating it out drops ``el`` from the streamed value and the
         next accepted delta ``l=`` lands on the gap, so the converted JSON
-        no longer extends what was streamed."""
-        engine = _make_engine(_extender_config(structural=frozenset("= ")))
+        no longer extends what was streamed. Holds for both extender hooks."""
+        engine = _make_engine(make_config(structural=frozenset("= ")))
         assert _run_streaming_tool(engine, "f", ["a", "=h", "el", "l=", "o "]) == {
             "a": "hell=o"
         }
@@ -1760,11 +1769,8 @@ class TestArgValueExtender:
 class _RecordingKvConverter:
     """``_kv_converter`` as a per-slot object that records what it is fed."""
 
-    instances: list[_RecordingKvConverter] = []
-
     def __init__(self) -> None:
         self.fed: list[str] = []
-        _RecordingKvConverter.instances.append(self)
 
     def feed(self, delta: str) -> None:
         self.fed.append(delta)
@@ -1773,24 +1779,17 @@ class _RecordingKvConverter:
         return _kv_converter("".join(self.fed), partial)
 
     def extender(self):
-        if re.search(r"\w+=\S+$", "".join(self.fed)) is None:
-            return None
-
-        def extend(delta: str) -> str | None:
-            if re.search(r"\s", delta):
-                return None
-            return json.dumps(delta, ensure_ascii=False)[1:-1]
-
-        return extend
+        return _kv_value_extender("".join(self.fed))
 
 
 def _slot_converter_config(
     structural: frozenset[str] | None = None,
+    factory=_RecordingKvConverter,
 ) -> ParserEngineConfig:
     return dataclasses.replace(
         _converter_config(),
         arg_converter=None,
-        slot_arg_converter=_RecordingKvConverter,
+        slot_arg_converter=factory,
         arg_structural_chars=structural,
     )
 
@@ -1798,53 +1797,29 @@ def _slot_converter_config(
 class TestSlotArgConverter:
     """Engine contract for ``ParserEngineConfig.slot_arg_converter``."""
 
-    @pytest.fixture(autouse=True)
-    def _reset_instances(self):
-        _RecordingKvConverter.instances.clear()
-        yield
-        _RecordingKvConverter.instances.clear()
-
     def test_each_slot_gets_its_own_converter_fed_its_deltas(self):
         """Two calls in one stream get two converters, and each one is fed
         exactly its own slot's argument deltas, in order, which is what lets
         a converter keep state instead of re-parsing the whole call."""
-        engine = _make_engine(_slot_converter_config())
-        streamed: dict[int, list[str]] = {}
-        for idx, chunks in enumerate([["a=1 ", "b=2 "], ["c=3 "]]):
-            events = [
-                SemanticEvent(EventType.TOOL_CALL_START, tool_index=idx),
-                SemanticEvent(EventType.TOOL_NAME, "f", tool_index=idx),
-                *(
-                    SemanticEvent(EventType.ARG_VALUE_CHUNK, c, tool_index=idx)
-                    for c in chunks
-                ),
-                SemanticEvent(EventType.TOOL_CALL_END, tool_index=idx),
-            ]
-            for event in events:
-                delta = engine._events_to_delta([event])
-                for tc in (delta and delta.tool_calls) or []:
-                    if tc.function and tc.function.arguments:
-                        streamed.setdefault(tc.index, []).append(tc.function.arguments)
+        made: list[_RecordingKvConverter] = []
 
-        assert json.loads("".join(streamed[0])) == {"a": "1", "b": "2"}
-        assert json.loads("".join(streamed[1])) == {"c": "3"}
-        first, second = _RecordingKvConverter.instances
-        assert first.fed == ["a=1 ", "b=2 "]
-        assert second.fed == ["c=3 "]
+        def factory() -> _RecordingKvConverter:
+            made.append(_RecordingKvConverter())
+            return made[-1]
 
-    def test_slot_converter_extender_streams_open_value(self):
-        """The per-slot ``extender`` replaces ``arg_value_extender``: a live
-        extender still sees deltas without structural chars."""
-        engine = _make_engine(_slot_converter_config(structural=frozenset("= ")))
-        assert _run_streaming_tool(engine, "f", ["a", "=h", "el", "l=", "o "]) == {
-            "a": "hell=o"
+        engine = _make_engine(_slot_converter_config(factory=factory))
+        assert _run_streaming_tool(engine, "f", ["a=1 ", "b=2 "]) == {
+            "a": "1",
+            "b": "2",
         }
+        assert _run_streaming_tool(engine, "f", ["c=3 "], tool_index=1) == {"c": "3"}
+        assert [c.fed for c in made] == [["a=1 ", "b=2 "], ["c=3 "]]
 
     @pytest.mark.parametrize(
         "overrides",
         [
             {"arg_converter": _kv_converter},
-            {"arg_converter": _kv_converter, "arg_value_extender": lambda raw: None},
+            {"arg_value_extender": _kv_value_extender},
         ],
     )
     def test_slot_converter_excludes_stateless_hooks(self, overrides):

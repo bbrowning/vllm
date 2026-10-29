@@ -133,20 +133,18 @@ WRITE_TOOL = ChatCompletionToolsParam(
         },
     },
 )
-CALL_HEAD = (
+LOOP_HEAD = (
     f"{THINK_END}{TOOL_CALL_START}Write\n"
     "<arg_key>file_path</arg_key><arg_value>/repo/app.py</arg_value>\n"
-    "<arg_key>line_count</arg_key><arg_value>120</arg_value>\n"
+)
+CALL_HEAD = (
+    LOOP_HEAD + "<arg_key>line_count</arg_key><arg_value>120</arg_value>\n"
     "<arg_key>content</arg_key><arg_value>"
 )
 CALL_TAIL = f"</arg_value>\n{TOOL_CALL_END}"
 # Escapes, non-ASCII, and tag-like text that must stay inside the value.
 CONTENT_LINE = 'if a < b > c: print("x\\y")  # </div> </arg_ <arg_key>\t\u00e9\n'
 # A model stuck in a loop repeats closed argument pairs inside one call.
-LOOP_HEAD = (
-    f"{THINK_END}{TOOL_CALL_START}Write\n"
-    "<arg_key>file_path</arg_key><arg_value>/repo/app.py</arg_value>\n"
-)
 LOOP_PAIRS = (
     "<arg_key>content</arg_key><arg_value>a > b</arg_value>\n"
     "<arg_key>line_count</arg_key><arg_value>1</arg_value>\n"
@@ -261,17 +259,15 @@ class TestStreamedToolArguments:
     @pytest.mark.parametrize("parser_cls", [Glm47MoeParser, Ling3Parser])
     def test_closed_pairs_are_parsed_once(self, mock_request, monkeypatch, parser_cls):
         """Each closed pair is matched once and no conversion rescans text
-        before the last closed value, for every parser built on the GLM-4.7
-        config."""
+        before the last closed value. Ling3 is covered explicitly because it
+        bypasses ``Glm47MoeParser.__init__`` and must get the converter from
+        the shared config alone."""
         mock_request.tools = [WRITE_TOOL]
         arg_re = glm47_moe._ARG_RE
         matches = 0
         longest_scan = 0
 
         class CountingPattern:
-            def __getattr__(self, name):
-                return getattr(arg_re, name)
-
             def finditer(self, text):
                 nonlocal matches, longest_scan
                 longest_scan = max(longest_scan, len(text))
