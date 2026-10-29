@@ -142,6 +142,7 @@ class ParserEngineConfig:
     # Builds a delta-fed converter for each tool-call slot in place of
     # ``arg_converter`` and ``arg_value_extender``, for formats whose
     # conversion cost would otherwise grow with the arguments already seen.
+    # Its ``extender`` is only consulted when ``stream_arg_deltas`` is set.
     slot_arg_converter: Callable[[], SlotArgConverter] | None = None
 
     # Special tokens exempt from auto-drop but not state-machine terminals.

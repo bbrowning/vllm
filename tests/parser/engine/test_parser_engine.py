@@ -8,7 +8,9 @@ DeltaMessage / ExtractedToolCallInformation protocol.
 from __future__ import annotations
 
 import dataclasses
+import gc
 import json
+import weakref
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -1825,6 +1827,20 @@ class TestSlotArgConverter:
     def test_slot_converter_excludes_stateless_hooks(self, overrides):
         with pytest.raises(ValueError, match="slot_arg_converter"):
             dataclasses.replace(_slot_converter_config(), **overrides)
+
+    def test_stateless_converter_does_not_keep_its_slot_alive(self):
+        """The adapter built for ``arg_converter`` must not form a cycle with
+        its slot: a finished parser's argument buffers are freed by reference
+        counting, not held until the cyclic collector runs."""
+        engine = _make_engine(_converter_config())
+        assert _run_streaming_tool(engine, "f", ["a=1 "]) == {"a": "1"}
+        slot_ref = weakref.ref(engine._tool_slots[0])
+        gc.disable()
+        try:
+            del engine
+            assert slot_ref() is None
+        finally:
+            gc.enable()
 
 
 # ── TestSafeArgPrefix ────────────────────────────────────────────

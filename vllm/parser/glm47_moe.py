@@ -71,14 +71,16 @@ class Glm47ArgConverter:
     never rescanned, and the open trailing value can only start there.
     """
 
-    __slots__ = ("_params", "_pending_parts")
+    __slots__ = ("_params", "_pending_parts", "_partial")
 
     def __init__(self) -> None:
         self._params: dict[str, object] = {}
         self._pending_parts: list[str] = []
+        self._partial: tuple[dict[str, object], str | None] | None = None
 
     def feed(self, delta: str) -> None:
         self._pending_parts.append(delta)
+        self._partial = None
 
     def _pending_text(self) -> str:
         pending = "".join(self._pending_parts)
@@ -108,14 +110,21 @@ class Glm47ArgConverter:
 
         return params, open_key
 
+    def _parse_partial(self) -> tuple[dict[str, object], str | None]:
+        """``_parse(partial=True)``, shared by ``convert`` and ``extender``."""
+        if self._partial is None:
+            self._partial = self._parse(partial=True)
+        return self._partial
+
     def convert(self, partial: bool) -> str:
-        return json.dumps(self._parse(partial)[0], ensure_ascii=False)
+        params = self._parse_partial()[0] if partial else self._parse(False)[0]
+        return json.dumps(params, ensure_ascii=False)
 
     def extender(self) -> ArgValueExtender | None:
         # The open value runs to the end of the arguments and is the last
         # JSON value, so a delta appends its JSON-escaped text unless it
         # closes the value.
-        params, open_key = self._parse(partial=True)
+        params, open_key = self._parse_partial()
         if open_key is None or next(reversed(params)) != open_key:
             return None
 
@@ -247,6 +256,9 @@ def glm47_moe_config(thinking: bool = True) -> ParserEngineConfig:
         },
         turn_boundary_tokens=GLM_TURN_BOUNDARIES,
         slot_arg_converter=Glm47ArgConverter,
+        # Every tag ends in ">", so a delta without one can only extend an
+        # open value. When no extender applies (a re-opened earlier key),
+        # that value waits for its closing tag.
         arg_structural_chars=frozenset(">"),
         stream_arg_deltas=True,
         tool_args_json=False,

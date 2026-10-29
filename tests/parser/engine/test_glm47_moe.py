@@ -284,6 +284,25 @@ class TestStreamedToolArguments:
         assert matches == len(arg_re.findall(text))
         assert longest_scan < len(LOOP_PAIRS)
 
+    def test_extender_reuses_the_partial_parse(self, monkeypatch):
+        """``extender`` runs right after ``convert(True)`` on every converted
+        delta and must not scan the open value a second time."""
+        scans = 0
+        arg_re = glm47_moe._ARG_RE
+
+        class CountingPattern:
+            def finditer(self, text):
+                nonlocal scans
+                scans += 1
+                return arg_re.finditer(text)
+
+        monkeypatch.setattr(glm47_moe, "_ARG_RE", CountingPattern())
+        converter = Glm47ArgConverter()
+        converter.feed("<arg_key>k</arg_key><arg_value>x > y")
+        converter.convert(True)
+        assert converter.extender() is not None
+        assert scans == 1
+
     def test_value_extender_stops_at_split_value_end(self):
         extend = _extender_for("<arg_key>k</arg_key><arg_value>x")
         assert extend is not None

@@ -7,6 +7,7 @@ extraction with a single :class:`StreamingParserEngine`.
 from __future__ import annotations
 
 import json
+import weakref
 from collections.abc import Callable, Sequence
 from functools import cached_property
 from typing import TYPE_CHECKING, NamedTuple
@@ -70,6 +71,7 @@ class ToolCallSlot:
         "extend_open_value",
         "open_value_streams",
         "arg_converter",
+        "__weakref__",
     )
 
     def __init__(self) -> None:
@@ -114,7 +116,12 @@ class ToolCallSlot:
 
 
 class _StatelessArgConverter:
-    """Runs a config's ``arg_converter``/``arg_value_extender`` on one slot."""
+    """Runs a config's ``arg_converter``/``arg_value_extender`` on one slot.
+
+    The slot accumulates the text, so ``feed`` is a no-op. It is held weakly
+    because the slot owns its converter, and a reference back would keep a
+    finished call's buffers alive until the cyclic collector runs.
+    """
 
     __slots__ = ("_slot", "_convert", "_extender")
 
@@ -124,20 +131,26 @@ class _StatelessArgConverter:
         convert: Callable[[str, bool], str],
         extender: Callable[[str], ArgValueExtender | None] | None,
     ) -> None:
-        self._slot = slot
+        self._slot = weakref.ref(slot)
         self._convert = convert
         self._extender = extender
 
+    @property
+    def _args(self) -> str:
+        slot = self._slot()
+        assert slot is not None
+        return slot.args
+
     def feed(self, delta: str) -> None:
-        pass  # the slot already accumulates the text
+        pass
 
     def convert(self, partial: bool) -> str:
-        return self._convert(self._slot.args, partial)
+        return self._convert(self._args, partial)
 
     def extender(self) -> ArgValueExtender | None:
         if self._extender is None:
             return None
-        return self._extender(self._slot.args)
+        return self._extender(self._args)
 
 
 class ParserEngine(Parser):
@@ -987,6 +1000,12 @@ class ParserEngine(Parser):
             self._tool_slots.append(slot)
 
     def _new_arg_converter(self, slot: ToolCallSlot) -> SlotArgConverter | None:
+        """Build the converter a new slot keeps for the rest of the call.
+
+        Subclasses that replace ``self._arg_converter`` must do so in
+        ``__init__``: a slot binds whichever converter is set when the slot
+        is created.
+        """
         if self._slot_arg_converter is not None:
             return self._slot_arg_converter()
         if self._arg_converter is not None:
