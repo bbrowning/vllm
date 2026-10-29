@@ -64,86 +64,75 @@ _PARTIAL_ARG_RE = re.compile(
 )
 
 
-class _ClosedArgs:
-    """Closed key/value pairs of a raw argument text, reused by longer texts.
+class Glm47ArgConverter:
+    """Converts one call's arguments, parsing each closed pair once.
 
-    Raw arguments only grow while a call streams, so a parse of a text that
-    extends ``text`` resumes after its last closed value.
+    Every ``raw_args`` extends the previous one (the ``SlotArgConverter``
+    contract), so the parse resumes after the last closed value seen.
     """
 
-    __slots__ = ("text", "params", "outside")
+    __slots__ = ("_end", "_params", "_outside")
 
     def __init__(self) -> None:
-        self.text = ""  # raw text up to the end of the last closed value
-        self.params: dict[str, object] = {}
-        self.outside = ""  # text of ``self.text`` outside the closed pairs
+        self._end = 0  # end of the last closed value
+        self._params: dict[str, object] = {}
+        self._outside = ""  # text before ``_end`` that is outside closed pairs
 
+    def parse(
+        self, raw_args: str, partial: bool
+    ) -> tuple[dict[str, object], str | None]:
+        """Return the arguments and the key of the open trailing value, if any."""
+        params = self._params
+        pos = self._end
+        for match in _ARG_RE.finditer(raw_args, pos):
+            self._outside += raw_args[pos : match.start()]
+            params[match.group("key").strip()] = match.group("value")
+            pos = match.end()
+        self._end = pos
 
-def _glm47_parse_args(
-    raw_args: str, partial: bool, closed: _ClosedArgs | None = None
-) -> tuple[dict[str, object], str | None]:
-    """Return the arguments and the key of the open trailing value, if any."""
-    params: dict[str, object] = {}
-    outside: list[str] = []
-    pos = 0
-    if closed is not None and raw_args.startswith(closed.text):
-        params.update(closed.params)
-        outside.append(closed.outside)
-        pos = len(closed.text)
-    start = pos
+        open_key = None
+        if partial:
+            remaining = self._outside + raw_args[pos:]
+            match = _PARTIAL_ARG_RE.search(remaining)
+            if match:
+                key = match.group("key").strip()
+                if key:
+                    params = {**params, key: match.group("value")}
+                    open_key = key
 
-    for match in _ARG_RE.finditer(raw_args, pos):
-        outside.append(raw_args[pos : match.start()])
-        params[match.group("key").strip()] = match.group("value")
-        pos = match.end()
+        return params, open_key
 
-    if closed is not None and pos > start:
-        closed.text = raw_args[:pos]
-        closed.params = dict(params)
-        closed.outside = "".join(outside)
+    def convert(self, raw_args: str, partial: bool) -> str:
+        return json.dumps(self.parse(raw_args, partial)[0], ensure_ascii=False)
 
-    open_key = None
-    if partial:
-        remaining = "".join(outside) + raw_args[pos:]
-        match = _PARTIAL_ARG_RE.search(remaining)
-        if match:
-            key = match.group("key").strip()
-            if key:
-                params[key] = match.group("value")
-                open_key = key
-
-    return params, open_key
-
-
-def _glm47_arg_converter(
-    raw_args: str, partial: bool, closed: _ClosedArgs | None = None
-) -> str:
-    return json.dumps(
-        _glm47_parse_args(raw_args, partial, closed)[0], ensure_ascii=False
-    )
-
-
-def _glm47_arg_value_extender(
-    raw_args: str, closed: _ClosedArgs | None = None
-) -> ArgValueExtender | None:
-    # The open value runs to the end of raw_args and is the last JSON value,
-    # so a delta appends its JSON-escaped text unless it closes the value.
-    params, open_key = _glm47_parse_args(raw_args, partial=True, closed=closed)
-    if open_key is None or next(reversed(params)) != open_key:
-        return None
-
-    keep = len(ARG_VALUE_END) - 1
-    tail = raw_args[-keep:]
-
-    def extend(delta: str) -> str | None:
-        nonlocal tail
-        text = tail + delta
-        if ARG_VALUE_END in text:
+    def extender(self, raw_args: str) -> ArgValueExtender | None:
+        # The open value runs to the end of raw_args and is the last JSON
+        # value, so a delta appends its JSON-escaped text unless it closes
+        # the value.
+        params, open_key = self.parse(raw_args, partial=True)
+        if open_key is None or next(reversed(params)) != open_key:
             return None
-        tail = text[-keep:]
-        return json.dumps(delta, ensure_ascii=False)[1:-1]
 
-    return extend
+        keep = len(ARG_VALUE_END) - 1
+        tail = raw_args[-keep:]
+
+        def extend(delta: str) -> str | None:
+            nonlocal tail
+            text = tail + delta
+            if ARG_VALUE_END in text:
+                return None
+            tail = text[-keep:]
+            return json.dumps(delta, ensure_ascii=False)[1:-1]
+
+        return extend
+
+
+def _glm47_arg_converter(raw_args: str, partial: bool) -> str:
+    return Glm47ArgConverter().convert(raw_args, partial)
+
+
+def _glm47_arg_value_extender(raw_args: str) -> ArgValueExtender | None:
+    return Glm47ArgConverter().extender(raw_args)
 
 
 def _glm53_always_thinks(tokenizer: TokenizerLike) -> bool:
@@ -259,9 +248,8 @@ def glm47_moe_config(thinking: bool = True) -> ParserEngineConfig:
             **arg_tag_transitions,
         },
         turn_boundary_tokens=GLM_TURN_BOUNDARIES,
-        arg_converter=_glm47_arg_converter,
+        slot_arg_converter=Glm47ArgConverter,
         arg_structural_chars=frozenset(">"),
-        arg_value_extender=_glm47_arg_value_extender,
         stream_arg_deltas=True,
         tool_args_json=False,
         validate_tool_names=True,
@@ -300,13 +288,6 @@ class Glm47MoeParser(ParserEngine):
             glm47_moe_config(thinking=self.thinking_enabled),
         )
         super().__init__(tokenizer, tools, **kwargs)
-        # Each streaming conversion resumes after the last closed pair.
-        if self._arg_converter is _glm47_arg_converter:
-            closed = _ClosedArgs()
-            self._arg_converter = functools.partial(_glm47_arg_converter, closed=closed)
-            self._arg_value_extender = functools.partial(
-                _glm47_arg_value_extender, closed=closed
-            )
 
     def _emit_name_delta(self, idx: int, deltas, name: str | None) -> None:
         if name is not None:

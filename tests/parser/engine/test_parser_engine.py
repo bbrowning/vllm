@@ -1754,6 +1754,106 @@ class TestArgValueExtender:
             dataclasses.replace(_extender_config(), **overrides)
 
 
+# ── TestSlotArgConverter ─────────────────────────────────────────
+
+
+class _RecordingKvConverter:
+    """``_kv_converter`` as a per-slot object that records what it is fed."""
+
+    instances: list[_RecordingKvConverter] = []
+
+    def __init__(self) -> None:
+        self.seen: list[str] = []  # every raw_args passed, in order
+        _RecordingKvConverter.instances.append(self)
+
+    def convert(self, raw_args: str, partial: bool) -> str:
+        self.seen.append(raw_args)
+        return _kv_converter(raw_args, partial)
+
+    def extender(self, raw_args: str):
+        self.seen.append(raw_args)
+        if re.search(r"\w+=\S+$", raw_args) is None:
+            return None
+
+        def extend(delta: str) -> str | None:
+            if re.search(r"\s", delta):
+                return None
+            return json.dumps(delta, ensure_ascii=False)[1:-1]
+
+        return extend
+
+
+def _slot_converter_config(
+    structural: frozenset[str] | None = None,
+) -> ParserEngineConfig:
+    return dataclasses.replace(
+        _converter_config(),
+        arg_converter=None,
+        slot_arg_converter=_RecordingKvConverter,
+        arg_structural_chars=structural,
+    )
+
+
+class TestSlotArgConverter:
+    """Engine contract for ``ParserEngineConfig.slot_arg_converter``."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_instances(self):
+        _RecordingKvConverter.instances.clear()
+        yield
+        _RecordingKvConverter.instances.clear()
+
+    def test_each_slot_gets_its_own_converter_fed_growing_args(self):
+        """Two calls in one stream get two converters, and each one only
+        ever sees its own slot's arguments, each text extending the last,
+        which is what lets a converter resume instead of re-parsing."""
+        engine = _make_engine(_slot_converter_config())
+        streamed: dict[int, list[str]] = {}
+        for idx, chunks in enumerate([["a=1 ", "b=2 "], ["c=3 "]]):
+            events = [
+                SemanticEvent(EventType.TOOL_CALL_START, tool_index=idx),
+                SemanticEvent(EventType.TOOL_NAME, "f", tool_index=idx),
+                *(
+                    SemanticEvent(EventType.ARG_VALUE_CHUNK, c, tool_index=idx)
+                    for c in chunks
+                ),
+                SemanticEvent(EventType.TOOL_CALL_END, tool_index=idx),
+            ]
+            for event in events:
+                delta = engine._events_to_delta([event])
+                for tc in (delta and delta.tool_calls) or []:
+                    if tc.function and tc.function.arguments:
+                        streamed.setdefault(tc.index, []).append(tc.function.arguments)
+
+        assert json.loads("".join(streamed[0])) == {"a": "1", "b": "2"}
+        assert json.loads("".join(streamed[1])) == {"c": "3"}
+        first, second = _RecordingKvConverter.instances
+        assert first.seen[-1] == "a=1 b=2 "
+        assert second.seen[-1] == "c=3 "
+        for converter in (first, second):
+            seen = converter.seen
+            assert all(b.startswith(a) for a, b in zip(seen, seen[1:]))
+
+    def test_slot_converter_extender_streams_open_value(self):
+        """The per-slot ``extender`` replaces ``arg_value_extender``: a live
+        extender still sees deltas without structural chars."""
+        engine = _make_engine(_slot_converter_config(structural=frozenset("= ")))
+        assert _run_streaming_tool(engine, "f", ["a", "=h", "el", "l=", "o "]) == {
+            "a": "hell=o"
+        }
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"arg_converter": _kv_converter},
+            {"arg_converter": _kv_converter, "arg_value_extender": lambda raw: None},
+        ],
+    )
+    def test_slot_converter_excludes_stateless_hooks(self, overrides):
+        with pytest.raises(ValueError, match="slot_arg_converter"):
+            dataclasses.replace(_slot_converter_config(), **overrides)
+
+
 # ── TestSafeArgPrefix ────────────────────────────────────────────
 
 

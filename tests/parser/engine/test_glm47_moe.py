@@ -24,10 +24,12 @@ from vllm.parser.glm47_moe import (
     THINK_START,
     TOOL_CALL_END,
     TOOL_CALL_START,
+    Glm47ArgConverter,
     Glm47MoeParser,
     _glm47_arg_value_extender,
     glm47_moe_config,
 )
+from vllm.parser.ling3 import Ling3Parser
 
 THINK_S, THINK_E = 1000, 1001
 TOOL_S, TOOL_E = 1002, 1003
@@ -156,14 +158,20 @@ def _pieces(text: str, size: int) -> list[str]:
     return [text[i : i + size] for i in range(0, len(text), size)]
 
 
-def _stream_arguments(parser, request, chunks: list[str]) -> str:
-    args = []
+def _stream_arguments_per_call(parser, request, chunks: list[str]) -> list[str]:
+    args: dict[int, list[str]] = {}
     for i, chunk in enumerate(chunks):
         delta = parser.parse_delta(chunk, [], request, finished=i == len(chunks) - 1)
         for tool_call in (delta and delta.tool_calls) or []:
             if tool_call.function and tool_call.function.arguments:
-                args.append(tool_call.function.arguments)
-    return "".join(args)
+                args.setdefault(tool_call.index, []).append(
+                    tool_call.function.arguments
+                )
+    return ["".join(args[idx]) for idx in sorted(args)]
+
+
+def _stream_arguments(parser, request, chunks: list[str]) -> str:
+    return "".join(_stream_arguments_per_call(parser, request, chunks))
 
 
 class TestStreamedToolArguments:
@@ -194,20 +202,18 @@ class TestStreamedToolArguments:
 
         def streaming_conversions(lines: int) -> int:
             calls = 0
-            base = glm47_moe_config()
-            base_converter = base.arg_converter
-            assert base_converter is not None
 
-            def counting_converter(raw_args: str, partial: bool) -> str:
-                nonlocal calls
-                if partial:
-                    calls += 1
-                return base_converter(raw_args, partial)
+            class CountingConverter(Glm47ArgConverter):
+                def convert(self, raw_args: str, partial: bool) -> str:
+                    nonlocal calls
+                    if partial:
+                        calls += 1
+                    return super().convert(raw_args, partial)
 
             parser = Glm47MoeParser(
                 make_mock_tokenizer(VOCAB),
                 parser_engine_config=dataclasses.replace(
-                    base, arg_converter=counting_converter
+                    glm47_moe_config(), slot_arg_converter=CountingConverter
                 ),
             )
             chunks = [
@@ -235,7 +241,7 @@ class TestStreamedToolArguments:
             + TOOL_CALL_END
         )
 
-        streamed = _stream_arguments(
+        streamed = _stream_arguments_per_call(
             Glm47MoeParser(make_mock_tokenizer(VOCAB)),
             mock_request,
             _pieces(text, size),
@@ -245,10 +251,12 @@ class TestStreamedToolArguments:
         )
 
         assert len(result.tool_calls) == 2
-        assert streamed == "".join(c.function.arguments for c in result.tool_calls)
+        assert streamed == [c.function.arguments for c in result.tool_calls]
 
-    def test_closed_pairs_are_parsed_once(self, mock_request, monkeypatch):
-        """Streaming cost must not grow with the closed pairs already seen."""
+    @pytest.mark.parametrize("parser_cls", [Glm47MoeParser, Ling3Parser])
+    def test_closed_pairs_are_parsed_once(self, mock_request, monkeypatch, parser_cls):
+        """Streaming cost must not grow with the closed pairs already seen,
+        for every parser built on the GLM-4.7 config."""
         mock_request.tools = [WRITE_TOOL]
         arg_re = glm47_moe._ARG_RE
         matches = 0
@@ -266,7 +274,7 @@ class TestStreamedToolArguments:
         monkeypatch.setattr(glm47_moe, "_ARG_RE", CountingPattern())
         text = LOOP_HEAD + LOOP_PAIRS * 200 + TOOL_CALL_END
         _stream_arguments(
-            Glm47MoeParser(make_mock_tokenizer(VOCAB)), mock_request, _pieces(text, 4)
+            parser_cls(make_mock_tokenizer(VOCAB)), mock_request, _pieces(text, 4)
         )
 
         assert matches == len(arg_re.findall(text))

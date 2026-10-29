@@ -21,12 +21,28 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from functools import cached_property
+from typing import Protocol
 
 from vllm.parser.engine.events import EventType
 
 # Maps a raw argument delta to the JSON text it appends to the open trailing
 # value, or returns None when the delta may change anything else.
 ArgValueExtender = Callable[[str], str | None]
+
+
+class SlotArgConverter(Protocol):
+    """``arg_converter`` and ``arg_value_extender`` bound to one tool call.
+
+    The engine builds one per tool-call slot from
+    ``ParserEngineConfig.slot_arg_converter`` and only passes it that slot's
+    raw arguments, each call's text extending the previous one, so an
+    implementation can resume from the arguments it has already parsed.
+    """
+
+    def convert(self, raw_args: str, partial: bool) -> str: ...
+
+    def extender(self, raw_args: str) -> ArgValueExtender | None: ...
+
 
 # Validates a complete non-streaming output. True means a valid tool-call
 # candidate, False means a malformed candidate that must fall back to content,
@@ -119,6 +135,12 @@ class ParserEngineConfig:
     # a terminal prefix. Requires ``arg_converter`` and ``stream_arg_deltas``.
     arg_value_extender: Callable[[str], ArgValueExtender | None] | None = None
 
+    # Builds a stateful converter for each tool-call slot in place of
+    # ``arg_converter`` and ``arg_value_extender``, for formats whose
+    # conversion cost would otherwise grow with the closed arguments already
+    # seen. Its ``extender`` has the ``arg_value_extender`` contract above.
+    slot_arg_converter: Callable[[], SlotArgConverter] | None = None
+
     # Special tokens exempt from auto-drop but not state-machine terminals.
     preserve_tokens: frozenset[str] = field(default_factory=frozenset)
 
@@ -139,6 +161,13 @@ class ParserEngineConfig:
     validate_tool_names: bool = False
 
     def __post_init__(self) -> None:
+        if self.slot_arg_converter is not None and (
+            self.arg_converter is not None or self.arg_value_extender is not None
+        ):
+            raise ValueError(
+                f"{self.name}: slot_arg_converter replaces arg_converter and "
+                "arg_value_extender"
+            )
         if self.arg_value_extender is not None and (
             self.arg_converter is None or not self.stream_arg_deltas
         ):
