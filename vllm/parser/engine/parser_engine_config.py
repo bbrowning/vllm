@@ -34,14 +34,18 @@ class SlotArgConverter(Protocol):
     """``arg_converter`` and ``arg_value_extender`` bound to one tool call.
 
     The engine builds one per tool-call slot from
-    ``ParserEngineConfig.slot_arg_converter`` and only passes it that slot's
-    raw arguments, each call's text extending the previous one, so an
-    implementation can resume from the arguments it has already parsed.
+    ``ParserEngineConfig.slot_arg_converter`` and feeds it that slot's raw
+    argument deltas as they arrive, so an implementation can keep only the
+    text it still needs instead of re-parsing the whole call on every
+    conversion. ``convert`` returns the JSON for everything fed so far;
+    ``extender`` has the ``arg_value_extender`` contract.
     """
 
-    def convert(self, raw_args: str, partial: bool) -> str: ...
+    def feed(self, delta: str) -> None: ...
 
-    def extender(self, raw_args: str) -> ArgValueExtender | None: ...
+    def convert(self, partial: bool) -> str: ...
+
+    def extender(self) -> ArgValueExtender | None: ...
 
 
 # Validates a complete non-streaming output. True means a valid tool-call
@@ -135,10 +139,9 @@ class ParserEngineConfig:
     # a terminal prefix. Requires ``arg_converter`` and ``stream_arg_deltas``.
     arg_value_extender: Callable[[str], ArgValueExtender | None] | None = None
 
-    # Builds a stateful converter for each tool-call slot in place of
+    # Builds a delta-fed converter for each tool-call slot in place of
     # ``arg_converter`` and ``arg_value_extender``, for formats whose
-    # conversion cost would otherwise grow with the closed arguments already
-    # seen. Its ``extender`` has the ``arg_value_extender`` contract above.
+    # conversion cost would otherwise grow with the arguments already seen.
     slot_arg_converter: Callable[[], SlotArgConverter] | None = None
 
     # Special tokens exempt from auto-drop but not state-machine terminals.

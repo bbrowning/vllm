@@ -26,7 +26,6 @@ from vllm.parser.glm47_moe import (
     TOOL_CALL_START,
     Glm47ArgConverter,
     Glm47MoeParser,
-    _glm47_arg_value_extender,
     glm47_moe_config,
 )
 from vllm.parser.ling3 import Ling3Parser
@@ -174,6 +173,12 @@ def _stream_arguments(parser, request, chunks: list[str]) -> str:
     return "".join(_stream_arguments_per_call(parser, request, chunks))
 
 
+def _extender_for(raw_args: str):
+    converter = Glm47ArgConverter()
+    converter.feed(raw_args)
+    return converter.extender()
+
+
 class TestStreamedToolArguments:
     @pytest.mark.parametrize(
         "tools, line_count",
@@ -204,11 +209,11 @@ class TestStreamedToolArguments:
             calls = 0
 
             class CountingConverter(Glm47ArgConverter):
-                def convert(self, raw_args: str, partial: bool) -> str:
+                def convert(self, partial: bool) -> str:
                     nonlocal calls
                     if partial:
                         calls += 1
-                    return super().convert(raw_args, partial)
+                    return super().convert(partial)
 
             parser = Glm47MoeParser(
                 make_mock_tokenizer(VOCAB),
@@ -255,19 +260,22 @@ class TestStreamedToolArguments:
 
     @pytest.mark.parametrize("parser_cls", [Glm47MoeParser, Ling3Parser])
     def test_closed_pairs_are_parsed_once(self, mock_request, monkeypatch, parser_cls):
-        """Streaming cost must not grow with the closed pairs already seen,
-        for every parser built on the GLM-4.7 config."""
+        """Each closed pair is matched once and no conversion rescans text
+        before the last closed value, for every parser built on the GLM-4.7
+        config."""
         mock_request.tools = [WRITE_TOOL]
         arg_re = glm47_moe._ARG_RE
         matches = 0
+        longest_scan = 0
 
         class CountingPattern:
             def __getattr__(self, name):
                 return getattr(arg_re, name)
 
-            def finditer(self, *args):
-                nonlocal matches
-                for match in arg_re.finditer(*args):
+            def finditer(self, text):
+                nonlocal matches, longest_scan
+                longest_scan = max(longest_scan, len(text))
+                for match in arg_re.finditer(text):
                     matches += 1
                     yield match
 
@@ -278,9 +286,10 @@ class TestStreamedToolArguments:
         )
 
         assert matches == len(arg_re.findall(text))
+        assert longest_scan < len(LOOP_PAIRS)
 
     def test_value_extender_stops_at_split_value_end(self):
-        extend = _glm47_arg_value_extender("<arg_key>k</arg_key><arg_value>x")
+        extend = _extender_for("<arg_key>k</arg_key><arg_value>x")
         assert extend is not None
         assert [extend(d) for d in ['a"\n', "</arg_", "value>"]] == [
             'a\\"\\n',
@@ -299,4 +308,4 @@ class TestStreamedToolArguments:
         ids=["closed_value", "repeated_key_not_last"],
     )
     def test_no_value_extender_unless_open_value_is_last(self, raw_args):
-        assert _glm47_arg_value_extender(raw_args) is None
+        assert _extender_for(raw_args) is None

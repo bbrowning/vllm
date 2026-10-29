@@ -67,33 +67,43 @@ _PARTIAL_ARG_RE = re.compile(
 class Glm47ArgConverter:
     """Converts one call's arguments, parsing each closed pair once.
 
-    Every ``raw_args`` extends the previous one (the ``SlotArgConverter``
-    contract), so the parse resumes after the last closed value seen.
+    Only the text after the last closed value is kept: a closed pair is
+    never rescanned, and the open trailing value can only start there.
     """
 
-    __slots__ = ("_end", "_params", "_outside")
+    __slots__ = ("_params", "_pending_parts", "_pending")
 
     def __init__(self) -> None:
-        self._end = 0  # end of the last closed value
         self._params: dict[str, object] = {}
-        self._outside = ""  # text before ``_end`` that is outside closed pairs
+        self._pending_parts: list[str] = []
+        self._pending: str | None = ""
 
-    def parse(
-        self, raw_args: str, partial: bool
-    ) -> tuple[dict[str, object], str | None]:
+    def feed(self, delta: str) -> None:
+        self._pending_parts.append(delta)
+        self._pending = None
+
+    def _pending_text(self) -> str:
+        if self._pending is None:
+            self._pending = "".join(self._pending_parts)
+            self._pending_parts = [self._pending]
+        return self._pending
+
+    def parse(self, partial: bool) -> tuple[dict[str, object], str | None]:
         """Return the arguments and the key of the open trailing value, if any."""
         params = self._params
-        pos = self._end
-        for match in _ARG_RE.finditer(raw_args, pos):
-            self._outside += raw_args[pos : match.start()]
+        pending = self._pending_text()
+        pos = 0
+        for match in _ARG_RE.finditer(pending):
             params[match.group("key").strip()] = match.group("value")
             pos = match.end()
-        self._end = pos
+        if pos:
+            pending = pending[pos:]
+            self._pending = pending
+            self._pending_parts = [pending]
 
         open_key = None
         if partial:
-            remaining = self._outside + raw_args[pos:]
-            match = _PARTIAL_ARG_RE.search(remaining)
+            match = _PARTIAL_ARG_RE.search(pending)
             if match:
                 key = match.group("key").strip()
                 if key:
@@ -102,19 +112,19 @@ class Glm47ArgConverter:
 
         return params, open_key
 
-    def convert(self, raw_args: str, partial: bool) -> str:
-        return json.dumps(self.parse(raw_args, partial)[0], ensure_ascii=False)
+    def convert(self, partial: bool) -> str:
+        return json.dumps(self.parse(partial)[0], ensure_ascii=False)
 
-    def extender(self, raw_args: str) -> ArgValueExtender | None:
-        # The open value runs to the end of raw_args and is the last JSON
-        # value, so a delta appends its JSON-escaped text unless it closes
-        # the value.
-        params, open_key = self.parse(raw_args, partial=True)
+    def extender(self) -> ArgValueExtender | None:
+        # The open value runs to the end of the arguments and is the last
+        # JSON value, so a delta appends its JSON-escaped text unless it
+        # closes the value.
+        params, open_key = self.parse(partial=True)
         if open_key is None or next(reversed(params)) != open_key:
             return None
 
         keep = len(ARG_VALUE_END) - 1
-        tail = raw_args[-keep:]
+        tail = self._pending_text()[-keep:]
 
         def extend(delta: str) -> str | None:
             nonlocal tail
@@ -125,14 +135,6 @@ class Glm47ArgConverter:
             return json.dumps(delta, ensure_ascii=False)[1:-1]
 
         return extend
-
-
-def _glm47_arg_converter(raw_args: str, partial: bool) -> str:
-    return Glm47ArgConverter().convert(raw_args, partial)
-
-
-def _glm47_arg_value_extender(raw_args: str) -> ArgValueExtender | None:
-    return Glm47ArgConverter().extender(raw_args)
 
 
 def _glm53_always_thinks(tokenizer: TokenizerLike) -> bool:

@@ -1709,7 +1709,7 @@ class TestArgDeltaWithConverter:
 def _extender_config(structural: frozenset[str] | None = None) -> ParserEngineConfig:
     """``_kv_converter`` plus an extender for its trailing ``k=v`` record,
     which is open until whitespace follows it; mirrors
-    ``_glm47_arg_value_extender``."""
+    ``Glm47ArgConverter.extender``."""
 
     def factory(raw_args: str):
         if re.search(r"\w+=\S+$", raw_args) is None:
@@ -1763,16 +1763,17 @@ class _RecordingKvConverter:
     instances: list[_RecordingKvConverter] = []
 
     def __init__(self) -> None:
-        self.seen: list[str] = []  # every raw_args passed, in order
+        self.fed: list[str] = []
         _RecordingKvConverter.instances.append(self)
 
-    def convert(self, raw_args: str, partial: bool) -> str:
-        self.seen.append(raw_args)
-        return _kv_converter(raw_args, partial)
+    def feed(self, delta: str) -> None:
+        self.fed.append(delta)
 
-    def extender(self, raw_args: str):
-        self.seen.append(raw_args)
-        if re.search(r"\w+=\S+$", raw_args) is None:
+    def convert(self, partial: bool) -> str:
+        return _kv_converter("".join(self.fed), partial)
+
+    def extender(self):
+        if re.search(r"\w+=\S+$", "".join(self.fed)) is None:
             return None
 
         def extend(delta: str) -> str | None:
@@ -1803,10 +1804,10 @@ class TestSlotArgConverter:
         yield
         _RecordingKvConverter.instances.clear()
 
-    def test_each_slot_gets_its_own_converter_fed_growing_args(self):
-        """Two calls in one stream get two converters, and each one only
-        ever sees its own slot's arguments, each text extending the last,
-        which is what lets a converter resume instead of re-parsing."""
+    def test_each_slot_gets_its_own_converter_fed_its_deltas(self):
+        """Two calls in one stream get two converters, and each one is fed
+        exactly its own slot's argument deltas, in order, which is what lets
+        a converter keep state instead of re-parsing the whole call."""
         engine = _make_engine(_slot_converter_config())
         streamed: dict[int, list[str]] = {}
         for idx, chunks in enumerate([["a=1 ", "b=2 "], ["c=3 "]]):
@@ -1828,11 +1829,8 @@ class TestSlotArgConverter:
         assert json.loads("".join(streamed[0])) == {"a": "1", "b": "2"}
         assert json.loads("".join(streamed[1])) == {"c": "3"}
         first, second = _RecordingKvConverter.instances
-        assert first.seen[-1] == "a=1 b=2 "
-        assert second.seen[-1] == "c=3 "
-        for converter in (first, second):
-            seen = converter.seen
-            assert all(b.startswith(a) for a, b in zip(seen, seen[1:]))
+        assert first.fed == ["a=1 ", "b=2 "]
+        assert second.fed == ["c=3 "]
 
     def test_slot_converter_extender_streams_open_value(self):
         """The per-slot ``extender`` replaces ``arg_value_extender``: a live

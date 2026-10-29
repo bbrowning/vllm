@@ -7,7 +7,7 @@ extraction with a single :class:`StreamingParserEngine`.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from functools import cached_property
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -72,7 +72,7 @@ class ToolCallSlot:
         "arg_converter",
     )
 
-    def __init__(self, arg_converter: SlotArgConverter | None = None) -> None:
+    def __init__(self) -> None:
         self.id: str = ""
         self.name: str = ""
         self._args_parts: list[str] = []
@@ -83,7 +83,7 @@ class ToolCallSlot:
         self._streamed_joined: str | None = ""
         self.extend_open_value: ArgValueExtender | None = None
         self.open_value_streams: bool = False
-        self.arg_converter = arg_converter
+        self.arg_converter: SlotArgConverter | None = None
 
     @property
     def args(self) -> str:
@@ -109,6 +109,33 @@ class ToolCallSlot:
     def append_streamed(self, value: str) -> None:
         self._streamed_parts.append(value)
         self._streamed_joined = None
+
+
+class _StatelessArgConverter:
+    """Runs a config's ``arg_converter``/``arg_value_extender`` on one slot."""
+
+    __slots__ = ("_slot", "_convert", "_extender")
+
+    def __init__(
+        self,
+        slot: ToolCallSlot,
+        convert: Callable[[str, bool], str],
+        extender: Callable[[str], ArgValueExtender | None] | None,
+    ) -> None:
+        self._slot = slot
+        self._convert = convert
+        self._extender = extender
+
+    def feed(self, delta: str) -> None:
+        pass  # the slot already accumulates the text
+
+    def convert(self, partial: bool) -> str:
+        return self._convert(self._slot.args, partial)
+
+    def extender(self) -> ArgValueExtender | None:
+        if self._extender is None:
+            return None
+        return self._extender(self._slot.args)
 
 
 class ParserEngine(Parser):
@@ -953,10 +980,18 @@ class ParserEngine(Parser):
 
     def _ensure_slot(self, idx: int) -> None:
         while len(self._tool_slots) <= idx:
-            make_converter = self._slot_arg_converter
-            self._tool_slots.append(
-                ToolCallSlot(make_converter() if make_converter else None)
+            slot = ToolCallSlot()
+            slot.arg_converter = self._new_arg_converter(slot)
+            self._tool_slots.append(slot)
+
+    def _new_arg_converter(self, slot: ToolCallSlot) -> SlotArgConverter | None:
+        if self._slot_arg_converter is not None:
+            return self._slot_arg_converter()
+        if self._arg_converter is not None:
+            return _StatelessArgConverter(
+                slot, self._arg_converter, self._arg_value_extender
             )
+        return None
 
     def _ensure_tool_id(self, slot: ToolCallSlot, name: str) -> None:
         if not slot.id:
@@ -1005,6 +1040,8 @@ class ParserEngine(Parser):
         slot = self._tool_slots[idx]
         if event.value:
             slot.append_args(event.value)
+            if slot.arg_converter is not None:
+                slot.arg_converter.feed(event.value)
 
         if not slot.name_sent:
             if slot.name:
@@ -1100,23 +1137,15 @@ class ParserEngine(Parser):
 
     # ── Arg conversion helpers ─────────────────────────────────────────
 
-    def _converts_args(self) -> bool:
-        return self._arg_converter is not None or self._slot_arg_converter is not None
-
-    def _convert_slot_args(self, slot: ToolCallSlot, partial: bool) -> str:
-        if slot.arg_converter is not None:
-            return slot.arg_converter.convert(slot.args, partial)
-        assert self._arg_converter is not None
-        return self._arg_converter(slot.args, partial)
-
     def _compute_arg_delta(self, idx: int, raw_delta: str) -> str | None:
-        if not self._converts_args():
+        slot = self._tool_slots[idx]
+        converter = slot.arg_converter
+        if converter is None:
             return raw_delta
 
         if not self._stream_arg_deltas:
             return None
 
-        slot = self._tool_slots[idx]
         structural = self._arg_structural_chars
         if slot.extend_open_value is not None:
             diff = slot.extend_open_value(raw_delta)
@@ -1130,7 +1159,7 @@ class ParserEngine(Parser):
             return None
 
         try:
-            current_json = self._convert_slot_args(slot, True)
+            current_json = converter.convert(True)
         except (json.JSONDecodeError, ValueError, TypeError):
             logger.debug("arg converter failed (streaming): %s", slot.args[:80])
             return None
@@ -1151,21 +1180,18 @@ class ParserEngine(Parser):
 
         slot.streamed_json = safe_json
         # Deltas that only extend the open value skip the conversion above.
-        if slot.arg_converter is not None:
-            slot.extend_open_value = slot.arg_converter.extender(slot.args)
-            slot.open_value_streams = value_streams
-        elif self._arg_value_extender is not None:
-            slot.extend_open_value = self._arg_value_extender(slot.args)
-            slot.open_value_streams = value_streams
+        slot.extend_open_value = converter.extender()
+        slot.open_value_streams = value_streams
         return safe_json[len(prev) :] or None
 
     def _flush_arg_converter(self, idx: int) -> str | None:
-        if not self._converts_args():
+        slot = self._tool_slots[idx]
+        converter = slot.arg_converter
+        if converter is None:
             return None
 
-        slot = self._tool_slots[idx]
         try:
-            final_json = self._convert_slot_args(slot, False)
+            final_json = converter.convert(False)
         except (json.JSONDecodeError, ValueError, TypeError):
             logger.debug("arg converter failed (flush): %s", slot.args[:80])
             return None
@@ -1214,9 +1240,10 @@ class ParserEngine(Parser):
             if not name and raw_body.strip():
                 name, args_json = self._extract_name_and_args(raw_body)
             elif raw_body.strip():
-                if self._converts_args():
+                converter = slot.arg_converter
+                if converter is not None:
                     try:
-                        args_json = self._convert_slot_args(slot, False)
+                        args_json = converter.convert(False)
                     except (json.JSONDecodeError, ValueError, TypeError):
                         logger.debug(
                             "arg converter failed (extract): %s", raw_body[:80]
