@@ -37,8 +37,10 @@ class SlotArgConverter(Protocol):
     ``ParserEngineConfig.slot_arg_converter`` and feeds it that slot's raw
     argument deltas as they arrive, so an implementation can keep only the
     text it still needs instead of re-parsing the whole call on every
-    conversion. ``convert`` returns the JSON for everything fed so far;
-    ``extender`` has the ``arg_value_extender`` contract.
+    conversion. ``convert`` returns the JSON for everything fed so far and
+    may be called any number of times; ``convert(False)`` is final and no
+    ``feed`` follows it. ``extender`` has the ``arg_value_extender``
+    contract and is asked right after each ``convert(True)``.
     """
 
     def feed(self, delta: str) -> None: ...

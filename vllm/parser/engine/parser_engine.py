@@ -70,7 +70,7 @@ class ToolCallSlot:
         "_streamed_joined",
         "extend_open_value",
         "open_value_streams",
-        "arg_converter",
+        "converter",
         "__weakref__",
     )
 
@@ -85,7 +85,7 @@ class ToolCallSlot:
         self._streamed_joined: str | None = ""
         self.extend_open_value: ArgValueExtender | None = None
         self.open_value_streams: bool = False
-        self.arg_converter: SlotArgConverter | None = None
+        self.converter: SlotArgConverter | None = None
 
     @property
     def args(self) -> str:
@@ -96,8 +96,8 @@ class ToolCallSlot:
     def append_args(self, value: str) -> None:
         self._args_parts.append(value)
         self._args_joined = None
-        if self.arg_converter is not None:
-            self.arg_converter.feed(value)
+        if self.converter is not None:
+            self.converter.feed(value)
 
     @property
     def streamed_json(self) -> str:
@@ -996,7 +996,7 @@ class ParserEngine(Parser):
     def _ensure_slot(self, idx: int) -> None:
         while len(self._tool_slots) <= idx:
             slot = ToolCallSlot()
-            slot.arg_converter = self._new_arg_converter(slot)
+            slot.converter = self._new_arg_converter(slot)
             self._tool_slots.append(slot)
 
     def _new_arg_converter(self, slot: ToolCallSlot) -> SlotArgConverter | None:
@@ -1158,7 +1158,7 @@ class ParserEngine(Parser):
 
     def _compute_arg_delta(self, idx: int, raw_delta: str) -> str | None:
         slot = self._tool_slots[idx]
-        converter = slot.arg_converter
+        converter = slot.converter
         if converter is None:
             return raw_delta
 
@@ -1205,7 +1205,7 @@ class ParserEngine(Parser):
 
     def _flush_arg_converter(self, idx: int) -> str | None:
         slot = self._tool_slots[idx]
-        converter = slot.arg_converter
+        converter = slot.converter
         if converter is None:
             return None
 
@@ -1259,7 +1259,7 @@ class ParserEngine(Parser):
             if not name and raw_body.strip():
                 name, args_json = self._extract_name_and_args(raw_body)
             elif raw_body.strip():
-                converter = slot.arg_converter
+                converter = slot.converter
                 if converter is not None:
                     try:
                         args_json = converter.convert(False)
